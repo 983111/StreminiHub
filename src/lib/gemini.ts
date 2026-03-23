@@ -29,7 +29,12 @@ export async function generateAcademicContent(prompt: string) {
     }
 
     const data = (await response.json()) as ChatCompletionResponse;
-    return data.choices?.[0]?.message?.content?.trim() || '';
+    const rawContent = data.choices?.[0]?.message?.content?.trim() || '';
+    return rawContent
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/```thinking[\s\S]*?```/gi, '')
+      .replace(/```reasoning[\s\S]*?```/gi, '')
+      .trim();
   } catch (error) {
     console.error('AI API Error:', error);
     return '% Error generating content. Please check endpoint availability and CORS settings.';
