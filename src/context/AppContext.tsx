@@ -207,7 +207,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     log('Reviewer', 'Final full-paper review and assembly...');
     
     // Create main.tex
-    const mainTex = `\\documentclass{article}
+    const mainTex = `\\documentclass[conference]{IEEEtran}
 \\usepackage[utf8]{inputenc}
 \\usepackage{amsmath}
 \\usepackage{amssymb}

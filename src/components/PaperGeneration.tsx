@@ -25,7 +25,7 @@ export default function PaperGeneration() {
   const { works, activeWorkId, generationStatus, agentLogs, references, updateGeneratedFile, addReference } = useAppContext();
   const [activeFile, setActiveFile] = useState('Introduction.tex');
   const [viewMode, setViewMode] = useState<'source' | 'pdf' | 'split'>('split');
-  const [docClass, setDocClass] = useState('article');
+  const [docClass, setDocClass] = useState('IEEEtran');
   const [pageSize, setPageSize] = useState('a4paper');
   const [margin, setMargin] = useState('1in');
   const [showSettings, setShowSettings] = useState(false);
@@ -143,8 +143,20 @@ export default function PaperGeneration() {
     });
   }
 
-  // Apply document settings (class, size, margins) and standard packages to prevent compilation errors
-  const preamblePackages = `\\usepackage[margin=${margin}]{geometry}
+  const getDocumentClassDeclaration = () => {
+    if (docClass === 'IEEEtran') {
+      return `\\documentclass[conference]{IEEEtran}`;
+    }
+    return `\\documentclass[${pageSize}]{${docClass}}`;
+  };
+
+  const preamblePackages = docClass === 'IEEEtran'
+    ? `\\usepackage{amsmath}
+\\usepackage{amssymb}
+\\usepackage{graphicx}
+\\usepackage{hyperref}
+\\usepackage[utf8]{inputenc}`
+    : `\\usepackage[margin=${margin}]{geometry}
 \\usepackage{amsmath}
 \\usepackage{amssymb}
 \\usepackage{graphicx}
@@ -155,7 +167,7 @@ export default function PaperGeneration() {
     // Replace existing documentclass and inject geometry and packages
     latexToCompile = latexToCompile.replace(
       /\\documentclass(\[[^\]]*\])?\{[^}]+\}/, 
-      `\\documentclass[${pageSize}]{${docClass}}\n${preamblePackages}`
+      `${getDocumentClassDeclaration()}\n${preamblePackages}`
     );
     
     // Ensure \author exists if \maketitle is used, as it causes fatal errors in some classes
@@ -168,7 +180,7 @@ export default function PaperGeneration() {
       .replace(/\\begin\{document\}/g, '')
       .replace(/\\end\{document\}/g, '');
     // Wrap snippets in a basic document structure with settings
-    latexToCompile = `\\documentclass[${pageSize}]{${docClass}}\n${preamblePackages}\n\\begin{document}\n${strippedContent}\n\\end{document}`;
+    latexToCompile = `${getDocumentClassDeclaration()}\n${preamblePackages}\n\\begin{document}\n${strippedContent}\n\\end{document}`;
   }
 
   // We now use a manual "Compile PDF" button instead of automatic submission
@@ -382,6 +394,7 @@ export default function PaperGeneration() {
                       <div>
                         <label className="block text-xs font-medium text-slate-700 mb-1">Document Class</label>
                         <select value={docClass} onChange={e => setDocClass(e.target.value)} className="w-full text-sm border border-slate-200 rounded p-1.5 focus:ring-1 focus:ring-indigo-500 outline-none">
+                          <option value="IEEEtran">IEEE (Conference)</option>
                           <option value="article">Article</option>
                           <option value="report">Report</option>
                           <option value="book">Book</option>
