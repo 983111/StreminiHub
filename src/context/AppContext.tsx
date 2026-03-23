@@ -44,27 +44,114 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-// ─── Strict LaTeX system prompt ────────────────────────────────────────────
-const LATEX_SYSTEM_INSTRUCTION = `You are an expert LaTeX academic writer specialising in IEEE conference papers.
-RULES — follow every one without exception:
-1. Output ONLY raw LaTeX code. Zero prose, zero explanation, zero markdown fences.
-2. Never emit <think>, <reasoning>, or any XML-style tags.
-3. Never wrap output in backtick code fences (\`\`\`latex or \`\`\`).
-4. Do NOT include \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
-5. Use \\cite{AuthorYear} for in-text citations.
-6. Use only standard IEEE-safe LaTeX commands (amsmath, graphicx, hyperref are pre-loaded).
-7. If you have nothing to say, output a single comment line: % (empty section)`;
+// ---------------------------------------------------------------------------
+// Strict system prompt — prepended to every AI call
+// ---------------------------------------------------------------------------
+const SYS = `You are an expert LaTeX academic writer for IEEE conference papers.
+STRICT RULES — violating any rule makes the output unusable:
+1. Output ONLY raw LaTeX. No prose, no explanations, no markdown.
+2. NEVER emit <think>, <reasoning>, or any XML/HTML tags.
+3. NEVER wrap output in backtick fences (\`\`\`latex, \`\`\`, etc.).
+4. NEVER include \\documentclass, \\usepackage, \\begin{document}, \\end{document}.
+5. Start your output directly with the first LaTeX command (e.g. \\section{...}).
+6. Use \\cite{key} for citations — keys are provided.
+7. You MAY use: tikzpicture, tabular, table, figure, color, xcolor commands — all packages are pre-loaded.
+8. For diagrams use TikZ. For data use tabular with \\rowcolor. Keep it valid pdflatex.`;
 
-function stripReasoning(text: string): string {
+// ---------------------------------------------------------------------------
+// Strip any reasoning / markdown the model leaks
+// ---------------------------------------------------------------------------
+function clean(text: string): string {
   return text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/```thinking[\s\S]*?```/gi, '')
-    .replace(/```reasoning[\s\S]*?```/gi, '')
-    .replace(/```latex\s*/gi, '')
-    .replace(/```\s*/g, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/```[\w]*\n?/gi, '')
+    .replace(/```/g, '')
+    .replace(/\\documentclass[\s\S]*?\\begin\{document\}/g, '')
+    .replace(/\\end\{document\}/g, '')
     .trim();
 }
 
+// ---------------------------------------------------------------------------
+// Derive a stable BibTeX key from a Reference
+// ---------------------------------------------------------------------------
+function bibKey(ref: Reference): string {
+  const last = ref.authors.split(',')[0].trim().split(' ').pop() || 'Author';
+  return last.replace(/[^a-zA-Z]/g, '') + ref.year;
+}
+
+// ---------------------------------------------------------------------------
+// Build the final IEEE main.tex (no \input — everything inlined by caller)
+// ---------------------------------------------------------------------------
+function buildMainTex(
+  title: string,
+  files: Record<string, string>,
+  refs: Reference[]
+): string {
+  // Inline section files in order — done HERE so buildCompilableLatex never
+  // recurses and the regex only runs once on deterministic strings.
+  const order = ['Abstract', 'Introduction', 'Methods', 'Results', 'Conclusion'];
+  const body = order
+    .map(s => {
+      const content = files[s + '.tex'] || '';
+      return content ? '% === ' + s + ' ===\n' + content : '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+
+  const bibliography = refs
+    .map(r => '\\bibitem{' + bibKey(r) + '} ' + r.authors + ', ``' + r.title + ",'' " + r.year + '.')
+    .join('\n');
+
+  const safeTitle = title
+    .replace(/&/g, '\\&')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_')
+    .replace(/\$/g, '\\$');
+
+  return `\\documentclass[conference]{IEEEtran}
+\\usepackage{cite}
+\\usepackage{amsmath,amssymb,amsfonts}
+\\usepackage{graphicx}
+\\usepackage{textcomp}
+\\usepackage{xcolor}
+\\usepackage{colortbl}
+\\usepackage{booktabs}
+\\usepackage{array}
+\\usepackage{tikz}
+\\usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,backgrounds,calc}
+\\usepackage{pgfplots}
+\\pgfplotsset{compat=1.17}
+\\usepackage{hyperref}
+\\hypersetup{hidelinks,colorlinks=false}
+
+\\definecolor{ieeeblue}{RGB}{0,84,166}
+\\definecolor{ieeegray}{RGB}{220,220,220}
+\\definecolor{ieeegreen}{RGB}{0,128,64}
+\\definecolor{ieeeorange}{RGB}{220,100,0}
+
+\\title{${safeTitle}}
+\\author{%
+  \\IEEEauthorblockN{AI Research System}
+  \\IEEEauthorblockA{\\textit{Automated Research Platform}\\\\
+  research@ai-system.org}
+}
+
+\\begin{document}
+\\maketitle
+
+${body}
+
+\\begin{thebibliography}{00}
+${bibliography}
+\\end{thebibliography}
+
+\\end{document}`;
+}
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
 export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [works, setWorks] = useState<Work[]>([
     {
@@ -74,251 +161,201 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       nodes: [
         { id: 'start-1', type: 'startNode', position: { x: 100, y: 100 }, data: { title: 'AI tools expand impact but contract focus', venue: 'Nature' } },
         { id: 'idea-1', type: 'ideaNode', position: { x: 500, y: 150 }, data: { body: 'Artificial intelligence tools have a dual effect on scientific research...' } },
-        { id: 'lit-1', type: 'literatureNode', position: { x: 500, y: 350 }, data: { title: 'Large-scale Bibliometric Analysis', file: 'dataset.csv' } }
+        { id: 'lit-1', type: 'literatureNode', position: { x: 500, y: 350 }, data: { title: 'Large-scale Bibliometric Analysis', file: 'dataset.csv' } },
       ],
       edges: [
         { id: 'e1', source: 'start-1', target: 'idea-1', type: 'smoothstep' },
-        { id: 'e2', source: 'start-1', target: 'lit-1', type: 'smoothstep' }
+        { id: 'e2', source: 'start-1', target: 'lit-1', type: 'smoothstep' },
       ],
-      generatedFiles: {}
-    }
+      generatedFiles: {},
+    },
   ]);
   const [activeWorkId, setActiveWorkId] = useState<string | null>('1');
   const [references, setReferences] = useState<Reference[]>([
-    { id: 'r1', title: "Inter-symbolic AI: Interlinking Symbolic AI and Subsymbolic AI", authors: "Andre Platzer", year: 2024, doi: "10.1007/978-3-031-75387-8_11", linked: 5 },
-    { id: 'r2', title: "Ranking scientists", authors: "S. N. Dorogovtsev, J. F. F. Mendes", year: 2015, linked: 0 },
-    { id: 'r3', title: "Human-AI Coevolution", authors: "Dino Pedreschi, Luca Pappalardo...", year: 2023, linked: 2 },
-    { id: 'r4', title: "A Survey of Multi-Agent Deep Reinforcement Learning with Communication", authors: "Changxi Zhu, Mehdi Dastani...", year: 2022, linked: 0 },
+    { id: 'r1', title: 'Inter-symbolic AI: Interlinking Symbolic AI and Subsymbolic AI', authors: 'Andre Platzer', year: 2024, doi: '10.1007/978-3-031-75387-8_11', linked: 5 },
+    { id: 'r2', title: 'Ranking scientists', authors: 'S. N. Dorogovtsev, J. F. F. Mendes', year: 2015, linked: 0 },
+    { id: 'r3', title: 'Human-AI Coevolution', authors: 'Dino Pedreschi, Luca Pappalardo et al.', year: 2023, linked: 2 },
+    { id: 'r4', title: 'A Survey of Multi-Agent Deep Reinforcement Learning with Communication', authors: 'Changxi Zhu, Mehdi Dastani et al.', year: 2022, linked: 0 },
   ]);
   const [generationStatus, setGenerationStatus] = useState<string>('idle');
   const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
 
   const createWork = (title: string, description: string) => {
-    const newWork: Work = {
-      id: uuidv4(),
-      title,
-      description,
-      nodes: [{ id: `start-${uuidv4()}`, type: 'startNode', position: { x: 100, y: 100 }, data: { title, venue: '' } }],
-      edges: [],
-      generatedFiles: {}
+    const w: Work = {
+      id: uuidv4(), title, description,
+      nodes: [{ id: 'start-' + uuidv4(), type: 'startNode', position: { x: 100, y: 100 }, data: { title, venue: '' } }],
+      edges: [], generatedFiles: {},
     };
-    setWorks(prev => [...prev, newWork]);
-    setActiveWorkId(newWork.id);
+    setWorks(prev => [...prev, w]);
+    setActiveWorkId(w.id);
   };
 
-  const updateWorkGraph = (id: string, nodes: Node[], edges: Edge[]) => {
+  const updateWorkGraph = (id: string, nodes: Node[], edges: Edge[]) =>
     setWorks(prev => prev.map(w => w.id === id ? { ...w, nodes, edges } : w));
-  };
 
-  const updateGeneratedFile = (workId: string, filename: string, content: string) => {
-    setWorks(prev => prev.map(w => {
-      if (w.id === workId) {
-        return { ...w, generatedFiles: { ...(w.generatedFiles || {}), [filename]: content } };
-      }
-      return w;
-    }));
-  };
+  // Public updateGeneratedFile — safe for use outside generation pipeline
+  const updateGeneratedFile = (workId: string, filename: string, content: string) =>
+    setWorks(prev => prev.map(w =>
+      w.id === workId
+        ? { ...w, generatedFiles: { ...(w.generatedFiles || {}), [filename]: content } }
+        : w
+    ));
 
-  const addReference = (ref: Omit<Reference, 'id'>) => {
+  const addReference = (ref: Omit<Reference, 'id'>) =>
     setReferences(prev => [...prev, { ...ref, id: uuidv4() }]);
-  };
 
-  // ─── Helper: derive BibTeX key from reference ───────────────────────────
-  const getBibKey = (ref: Reference): string => {
-    const firstAuthor = ref.authors.split(',')[0].split(' ').pop() || 'Author';
-    return `${firstAuthor.replace(/[^a-zA-Z]/g, '')}${ref.year}`;
-  };
-
-  // ─── Build a .bib file from references ──────────────────────────────────
-  const buildBibFile = (refs: Reference[]): string => {
-    return refs.map(ref => {
-      const key = getBibKey(ref);
-      return `@article{${key},
-  author  = {${ref.authors}},
-  title   = {{${ref.title}}},
-  year    = {${ref.year}}${ref.doi ? `,\n  doi     = {${ref.doi}}` : ''}
-}`;
-    }).join('\n\n');
-  };
-
-  // ─── Build a complete IEEE main.tex ─────────────────────────────────────
-  const buildMainTex = (title: string, refs: Reference[]): string => {
-    const bibEntries = refs.map(ref => {
-      const key = getBibKey(ref);
-      return `\\bibitem{${key}} ${ref.authors}, ``${ref.title},'' ${ref.year}.`;
-    }).join('\n');
-
-    return `\\documentclass[conference]{IEEEtran}
-\\IEEEoverridecommandlockouts
-\\usepackage{cite}
-\\usepackage{amsmath,amssymb,amsfonts}
-\\usepackage{graphicx}
-\\usepackage{textcomp}
-\\usepackage{xcolor}
-\\usepackage[utf8]{inputenc}
-\\usepackage[T1]{fontenc}
-\\usepackage{hyperref}
-\\hypersetup{hidelinks}
-
-\\title{${title.replace(/_/g, '\\_')}}
-\\author{\\IEEEauthorblockN{AI Research System}
-\\IEEEauthorblockA{\\textit{Automated Research Platform}}}
-
-\\begin{document}
-
-\\maketitle
-
-\\input{Abstract}
-\\input{Introduction}
-\\input{Methods}
-\\input{Results}
-\\input{Conclusion}
-
-\\begin{thebibliography}{00}
-${bibEntries}
-\\end{thebibliography}
-
-\\end{document}`;
-  };
-
-  // ─── Main generation pipeline ────────────────────────────────────────────
+  // ---------------------------------------------------------------------------
+  // Generation pipeline
+  // Uses a LOCAL files accumulator to avoid React stale-closure bugs where
+  // each async call would overwrite previous results via the state setter.
+  // At the end, one atomic setWorks() call commits everything at once.
+  // ---------------------------------------------------------------------------
   const startGeneration = async (latestNodes?: Node[], latestEdges?: Edge[]) => {
     if (!activeWorkId) return;
     const work = works.find(w => w.id === activeWorkId);
     if (!work) return;
 
+    // ---- Reset ----
     setGenerationStatus('planning');
     setAgentLogs([]);
 
-    const log = (agent: string, message: string) => {
+    // Local accumulator — avoids stale React state reads mid-async
+    const files: Record<string, string> = {};
+
+    const log = (agent: string, message: string) =>
       setAgentLogs(prev => [...prev, { agent, message, time: new Date().toLocaleTimeString() }]);
-    };
 
-    log('System', 'Initializing generation sequence...');
+    // Flush accumulated files to React state (call after every section so the
+    // source pane updates in real time)
+    const flush = () =>
+      setWorks(prev => prev.map(w =>
+        w.id === activeWorkId
+          ? { ...w, generatedFiles: { ...(w.generatedFiles || {}), ...files } }
+          : w
+      ));
 
-    const nodesToUse = latestNodes || work.nodes;
-    const graphContext = nodesToUse.map(n => JSON.stringify(n.data)).join('\n');
-    const refsContext = references.map(r => `${getBibKey(r)}: "${r.title}" by ${r.authors} (${r.year})`).join('\n');
+    log('System', 'Initialising generation sequence...');
 
-    // ── 1. Planning ─────────────────────────────────────────────────────────
+    const nodes = latestNodes || work.nodes;
+    const graphCtx = nodes.map(n => JSON.stringify(n.data)).join('\n');
+    const refCtx = references.map(r => bibKey(r) + ': "' + r.title + '" by ' + r.authors + ' (' + r.year + ')').join('\n');
+
+    // ---- 1. Plan ----
     log('Planner', 'Analysing research graph...');
-    const outlinePrompt = `${LATEX_SYSTEM_INSTRUCTION}
-
-Create a concise paragraph-level outline (plain text, NOT LaTeX) for each section of an IEEE paper titled "${work.title}".
-Research context:\n${graphContext}
-Respond with a plain-text outline only — no code, no LaTeX.`;
-
-    const outline = stripReasoning(await generateAcademicContent(outlinePrompt));
+    const outlineRaw = await generateAcademicContent(
+      'Create a concise plain-text paragraph-level outline for an IEEE paper titled "' + work.title + '".\n' +
+      'Research context:\n' + graphCtx + '\n' +
+      'Return plain text only — no LaTeX, no markdown.'
+    );
+    const outline = outlineRaw.replace(/```[\s\S]*?```/g, '').trim();
     log('Planner', 'Outline ready.');
 
-    // ── 2. Reference discovery ──────────────────────────────────────────────
+    // ---- 2. Discover ----
     setGenerationStatus('discovering');
-    log('Commander', 'Orchestrating reference discovery...');
-    await new Promise(r => setTimeout(r, 800));
-    log('Paper Parser', `${references.length} references loaded from library.`);
+    log('Paper Parser', references.length + ' references loaded from library.');
+    await new Promise(r => setTimeout(r, 400));
 
-    // ── 3. Assigning ────────────────────────────────────────────────────────
+    // ---- 3. Assign ----
     setGenerationStatus('assigning');
     log('Commander', 'Assigning references to sections...');
-    await new Promise(r => setTimeout(r, 600));
-    log('Commander', 'Reference assignment complete.');
+    await new Promise(r => setTimeout(r, 300));
+    log('Commander', 'Assignment complete.');
 
-    // ── 4. Section generation (parallel) ───────────────────────────────────
+    // ---- 4. Body sections (sequential to avoid rate limits) ----
     setGenerationStatus('intro');
-    log('Writer', 'Drafting Introduction, Methods, Results in parallel...');
 
-    const generateSection = async (
-      sectionName: string,
-      instructions: string
-    ): Promise<string> => {
-      log(`Writer (${sectionName})`, `Drafting ${sectionName}...`);
-      const prompt = `${LATEX_SYSTEM_INSTRUCTION}
-
-Write the \\section{${sectionName}} for an IEEE paper titled "${work.title}".
-Paper outline:\n${outline}
-Available citations (use \\cite{key}):\n${refsContext}
-Research context:\n${graphContext}
-
-${instructions}
-
-Output raw LaTeX only — no preamble, no \\begin{document}.`;
-
+    const genSection = async (name: string, extra: string): Promise<string> => {
+      log('Writer (' + name + ')', 'Drafting ' + name + '...');
+      const prompt =
+        SYS + '\n\n' +
+        'Write \\section{' + name + '} for IEEE paper: "' + work.title + '".\n' +
+        'Outline:\n' + outline + '\n' +
+        'Citations available (use \\cite{key}):\n' + refCtx + '\n' +
+        'Research context:\n' + graphCtx + '\n\n' +
+        extra + '\n\n' +
+        'IMPORTANT: Start with \\section{' + name + '} and output raw LaTeX only.';
       const raw = await generateAcademicContent(prompt);
-      const clean = stripReasoning(raw);
-      updateGeneratedFile(activeWorkId!, `${sectionName}.tex`, clean);
-      log(`Reviewer (${sectionName})`, `${sectionName} passed consistency check.`);
-      return clean;
+      const result = clean(raw);
+      files[name + '.tex'] = result;
+      flush();
+      log('Reviewer (' + name + ')', name + ' verified.');
+      return result;
     };
 
-    const [introText, methodsText, resultsText] = await Promise.all([
-      generateSection('Introduction',
-        'Cover background, motivation, related work (with \\cite{}), and contributions. Use \\section{Introduction}.'),
-      generateSection('Methods',
-        'Detail experimental setup, algorithms, or theoretical framework. Use \\section{Methods}.'),
-      generateSection('Results',
-        'Present quantitative and qualitative findings, tables or figures if appropriate. Use \\section{Results}.')
-    ]);
+    const introText = await genSection('Introduction',
+      'Include: background, motivation, related work with \\cite{}, contributions list.\n' +
+      'Add a TikZ diagram showing the research overview/pipeline using \\begin{tikzpicture}. Use \\definecolor or xcolor named colors (ieeeblue, ieeegreen etc.).'
+    );
 
-    // ── 5. Synthesis ────────────────────────────────────────────────────────
+    setGenerationStatus('body');
+    const methodsText = await genSection('Methods',
+      'Describe methodology, algorithms, experimental setup.\n' +
+      'Include a TikZ flowchart or architecture diagram. Include one \\begin{table} with \\rowcolor{ieeegray} for header row and \\toprule/\\midrule/\\bottomrule.'
+    );
+
+    const resultsText = await genSection('Results',
+      'Present findings. Include one pgfplots bar chart or line chart using \\begin{tikzpicture}\\begin{axis}. ' +
+      'Include one \\begin{table} comparing methods with colored rows using \\rowcolor.'
+    );
+
+    // ---- 5. Synthesis ----
     setGenerationStatus('synthesis');
-    log('Writer', 'Synthesising Abstract and Conclusion...');
+    log('Writer (Abstract)', 'Drafting Abstract...');
 
-    // Abstract
-    const abstractPrompt = `${LATEX_SYSTEM_INSTRUCTION}
-
-Write ONLY the IEEE abstract environment for a paper titled "${work.title}".
-Based on:
-Introduction summary: ${introText.slice(0, 600)}
-Methods summary: ${methodsText.slice(0, 400)}
-Results summary: ${resultsText.slice(0, 400)}
-
-Output exactly:
-\\begin{abstract}
-(150–200 words of abstract text)
-\\end{abstract}`;
-
-    const abstractRaw = stripReasoning(await generateAcademicContent(abstractPrompt));
-    // Ensure it is wrapped correctly even if the model slips
-    const abstractContent = abstractRaw.includes('\\begin{abstract}')
-      ? abstractRaw.match(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/)?.[0] ?? abstractRaw
-      : `\\begin{abstract}\n${abstractRaw}\n\\end{abstract}`;
-    updateGeneratedFile(activeWorkId!, 'Abstract.tex', abstractContent);
+    const abstractRaw = await generateAcademicContent(
+      SYS + '\n\n' +
+      'Write ONLY an IEEE \\begin{abstract}...\\end{abstract} for paper: "' + work.title + '".\n' +
+      'Based on Introduction: ' + introText.slice(0, 500) + '\n' +
+      'Methods: ' + methodsText.slice(0, 300) + '\n' +
+      'Results: ' + resultsText.slice(0, 300) + '\n\n' +
+      'Output exactly \\begin{abstract} ... \\end{abstract} and nothing else.'
+    );
+    const abstractCleaned = clean(abstractRaw);
+    const abstractContent = abstractCleaned.includes('\\begin{abstract}')
+      ? (abstractCleaned.match(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/) || [''])[0]
+      : '\\begin{abstract}\n' + abstractCleaned + '\n\\end{abstract}';
+    files['Abstract.tex'] = abstractContent;
+    flush();
     log('Writer (Abstract)', 'Abstract complete.');
 
-    // Conclusion
-    const conclusionPrompt = `${LATEX_SYSTEM_INSTRUCTION}
-
-Write the \\section{Conclusion} for the IEEE paper titled "${work.title}".
-Summarise contributions, discuss limitations and future work.
-Introduction: ${introText.slice(0, 400)}
-Results: ${resultsText.slice(0, 400)}
-
-Output raw LaTeX only — start with \\section{Conclusion}.`;
-
-    const conclusionRaw = stripReasoning(await generateAcademicContent(conclusionPrompt));
-    updateGeneratedFile(activeWorkId!, 'Conclusion.tex', conclusionRaw);
+    const conclusionRaw = await generateAcademicContent(
+      SYS + '\n\n' +
+      'Write \\section{Conclusion} for IEEE paper: "' + work.title + '".\n' +
+      'Summarise contributions, limitations, future work.\n' +
+      'Introduction snippet: ' + introText.slice(0, 300) + '\n' +
+      'Results snippet: ' + resultsText.slice(0, 300) + '\n\n' +
+      'Start with \\section{Conclusion} and output raw LaTeX only.'
+    );
+    files['Conclusion.tex'] = clean(conclusionRaw);
+    flush();
     log('Writer (Conclusion)', 'Conclusion complete.');
-    log('Reviewer', 'Abstract and Conclusion verified.');
 
-    // ── 6. Assembly ─────────────────────────────────────────────────────────
+    // ---- 6. Assemble ----
     setGenerationStatus('review');
-    log('Typesetter', 'Assembling main.tex and references.bib...');
+    log('Typesetter', 'Assembling final main.tex...');
 
-    const mainTex = buildMainTex(work.title, references);
-    updateGeneratedFile(activeWorkId!, 'main.tex', mainTex);
+    // Build references.bib
+    files['references.bib'] = references.map(r => {
+      const k = bibKey(r);
+      return '@article{' + k + ',\n  author = {' + r.authors + '},\n  title  = {{' + r.title + '}},\n  year   = {' + r.year + '}' + (r.doi ? ',\n  doi    = {' + r.doi + '}' : '') + '\n}';
+    }).join('\n\n');
 
-    const bibContent = buildBibFile(references);
-    updateGeneratedFile(activeWorkId!, 'references.bib', bibContent);
+    // Build main.tex — uses local `files` accumulator, NO \input commands,
+    // everything is inlined directly so there is nothing to recursively expand
+    files['main.tex'] = buildMainTex(work.title, files, references);
+
+    // One final atomic flush of everything
+    flush();
 
     setGenerationStatus('completed');
-    log('System', 'Paper generation complete. Click "Compile PDF" to render.');
+    log('System', 'Generation complete. Click "Compile PDF" to render.');
   };
 
   return (
     <AppContext.Provider value={{
       works, activeWorkId, references, generationStatus, agentLogs,
       createWork, setActiveWork: setActiveWorkId, updateWorkGraph,
-      addReference, startGeneration, setGenerationStatus, updateGeneratedFile
+      addReference, startGeneration, setGenerationStatus, updateGeneratedFile,
     }}>
       {children}
     </AppContext.Provider>
@@ -326,7 +363,7 @@ Output raw LaTeX only — start with \\section{Conclusion}.`;
 };
 
 export const useAppContext = () => {
-  const context = useContext(AppContext);
-  if (!context) throw new Error('useAppContext must be used within AppProvider');
-  return context;
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error('useAppContext must be used within AppProvider');
+  return ctx;
 };
