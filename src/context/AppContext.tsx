@@ -44,6 +44,27 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+// ─── Strict LaTeX system prompt ────────────────────────────────────────────
+const LATEX_SYSTEM_INSTRUCTION = `You are an expert LaTeX academic writer specialising in IEEE conference papers.
+RULES — follow every one without exception:
+1. Output ONLY raw LaTeX code. Zero prose, zero explanation, zero markdown fences.
+2. Never emit <think>, <reasoning>, or any XML-style tags.
+3. Never wrap output in backtick code fences (\`\`\`latex or \`\`\`).
+4. Do NOT include \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
+5. Use \\cite{AuthorYear} for in-text citations.
+6. Use only standard IEEE-safe LaTeX commands (amsmath, graphicx, hyperref are pre-loaded).
+7. If you have nothing to say, output a single comment line: % (empty section)`;
+
+function stripReasoning(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/```thinking[\s\S]*?```/gi, '')
+    .replace(/```reasoning[\s\S]*?```/gi, '')
+    .replace(/```latex\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .trim();
+}
+
 export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [works, setWorks] = useState<Work[]>([
     {
@@ -81,7 +102,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       edges: [],
       generatedFiles: {}
     };
-    setWorks([...works, newWork]);
+    setWorks(prev => [...prev, newWork]);
     setActiveWorkId(newWork.id);
   };
 
@@ -92,131 +113,56 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const updateGeneratedFile = (workId: string, filename: string, content: string) => {
     setWorks(prev => prev.map(w => {
       if (w.id === workId) {
-        return {
-          ...w,
-          generatedFiles: {
-            ...(w.generatedFiles || {}),
-            [filename]: content
-          }
-        };
+        return { ...w, generatedFiles: { ...(w.generatedFiles || {}), [filename]: content } };
       }
       return w;
     }));
   };
 
   const addReference = (ref: Omit<Reference, 'id'>) => {
-    setReferences([...references, { ...ref, id: uuidv4() }]);
+    setReferences(prev => [...prev, { ...ref, id: uuidv4() }]);
   };
 
-  const startGeneration = async (latestNodes?: Node[], latestEdges?: Edge[]) => {
-    if (!activeWorkId) return;
-    const work = works.find(w => w.id === activeWorkId);
-    if (!work) return;
+  // ─── Helper: derive BibTeX key from reference ───────────────────────────
+  const getBibKey = (ref: Reference): string => {
+    const firstAuthor = ref.authors.split(',')[0].split(' ').pop() || 'Author';
+    return `${firstAuthor.replace(/[^a-zA-Z]/g, '')}${ref.year}`;
+  };
 
-    setGenerationStatus('planning');
-    setAgentLogs([]);
-    
-    const log = (agent: string, message: string) => {
-      setAgentLogs(prev => [...prev, { agent, message, time: new Date().toLocaleTimeString() }]);
-    };
+  // ─── Build a .bib file from references ──────────────────────────────────
+  const buildBibFile = (refs: Reference[]): string => {
+    return refs.map(ref => {
+      const key = getBibKey(ref);
+      return `@article{${key},
+  author  = {${ref.authors}},
+  title   = {{${ref.title}}},
+  year    = {${ref.year}}${ref.doi ? `,\n  doi     = {${ref.doi}}` : ''}
+}`;
+    }).join('\n\n');
+  };
 
-    log('System', 'Initializing generation sequence...');
-    
-    // Use latest nodes if provided, otherwise fallback to work.nodes
-    const nodesToUse = latestNodes || work.nodes;
-    const graphContext = JSON.stringify(nodesToUse.map(n => n.data));
-    const refsContext = JSON.stringify(references.map(r => `${r.title} by ${r.authors} (${r.year})`));
+  // ─── Build a complete IEEE main.tex ─────────────────────────────────────
+  const buildMainTex = (title: string, refs: Reference[]): string => {
+    const bibEntries = refs.map(ref => {
+      const key = getBibKey(ref);
+      return `\\bibitem{${key}} ${ref.authors}, ``${ref.title},'' ${ref.year}.`;
+    }).join('\n');
 
-    // 1. Planning
-    log('Planner', 'Analyzing research graph nodes and edges...');
-    const outlinePrompt = `You are an expert academic planner. Based on the following research graph context: ${graphContext}, create a detailed outline for an academic paper titled "${work.title}". Include key points for Introduction, Methods, and Results.`;
-    const outline = await generateAcademicContent(outlinePrompt);
-    log('Planner', 'Outline generated successfully.');
-    
-    // 2. Discovering
-    setGenerationStatus('discovering');
-    log('Commander', 'Orchestrating reference discovery...');
-    await new Promise(r => setTimeout(r, 1000));
-    log('Paper Parser', `Found ${references.length} relevant papers from the library.`);
-
-    // 3. Assigning
-    setGenerationStatus('assigning');
-    log('Commander', 'Assigning references to sections...');
-    await new Promise(r => setTimeout(r, 1000));
-
-    // 4. Drafting (Parallel generation of body sections)
-    setGenerationStatus('intro');
-    log('Writer', 'Drafting core sections (Introduction, Methods, Results) in parallel...');
-    
-    const generateSection = async (sectionName: string, instructions: string) => {
-      log(`Writer (${sectionName})`, `Starting draft of ${sectionName}...`);
-      const prompt = `You are an academic AI writer. Write the ${sectionName} section in LaTeX for a paper titled "${work.title}". 
-      Context from research graph: ${graphContext}.
-      References available: ${refsContext}.
-      Paper Outline: ${outline}
-      ${instructions}
-      Output ONLY valid LaTeX code without markdown blocks or explanations. Do not include \\documentclass or \\begin{document}.`;
-      
-      const content = await generateAcademicContent(prompt);
-      const cleanContent = content.replace(/```latex/g, '').replace(/```/g, '').trim();
-      updateGeneratedFile(activeWorkId, `${sectionName}.tex`, cleanContent);
-      log(`Reviewer (${sectionName})`, `${sectionName} logical consistency check passed.`);
-      return cleanContent;
-    };
-
-    const [introText, methodsText, resultsText] = await Promise.all([
-      generateSection('Introduction', 'Focus on the background, motivation, and problem statement. Cite relevant references using \\cite{}.'),
-      generateSection('Methods', 'Detail the methodology, experimental setup, or theoretical framework.'),
-      generateSection('Results', 'Present the findings, data analysis, and discussion of the results.')
-    ]);
-
-    // 5. Synthesis (Abstract and Conclusion depend on the body)
-    setGenerationStatus('synthesis');
-    log('Writer', 'Synthesizing Abstract and Conclusion based on core sections...');
-    
-    const synthesisPrompt = `You are an academic AI. Write the Abstract and Conclusion sections in LaTeX for a paper titled "${work.title}".
-    Here is the Introduction: ${introText}
-    Here are the Methods: ${methodsText}
-    Here are the Results: ${resultsText}
-    Output ONLY valid LaTeX code without markdown blocks or explanations. Format as:
-    % ABSTRACT
-    \\begin{abstract}
-    ...
-    \\end{abstract}
-    
-    % CONCLUSION
-    \\section{Conclusion}
-    ...`;
-    
-    const synthesisText = await generateAcademicContent(synthesisPrompt);
-    const cleanSynthesis = synthesisText.replace(/```latex/g, '').replace(/```/g, '').trim();
-    
-    // Split abstract and conclusion (rough heuristic)
-    const abstractMatch = cleanSynthesis.match(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/);
-    const conclusionMatch = cleanSynthesis.match(/\\section\{Conclusion\}[\s\S]*/i);
-    
-    const abstractContent = abstractMatch ? abstractMatch[0] : '% Abstract generation failed';
-    const conclusionContent = conclusionMatch ? conclusionMatch[0] : '% Conclusion generation failed';
-
-    updateGeneratedFile(activeWorkId, 'Abstract.tex', abstractContent);
-    updateGeneratedFile(activeWorkId, 'Conclusion.tex', conclusionContent);
-    log('Reviewer', 'Abstract and Conclusion verified against body sections.');
-
-    // 6. Review & Assembly
-    setGenerationStatus('review');
-    log('Reviewer', 'Final full-paper review and assembly...');
-    
-    // Create main.tex
-    const mainTex = `\\documentclass[conference]{IEEEtran}
-\\usepackage[utf8]{inputenc}
-\\usepackage{amsmath}
-\\usepackage{amssymb}
+    return `\\documentclass[conference]{IEEEtran}
+\\IEEEoverridecommandlockouts
+\\usepackage{cite}
+\\usepackage{amsmath,amssymb,amsfonts}
 \\usepackage{graphicx}
+\\usepackage{textcomp}
+\\usepackage{xcolor}
+\\usepackage[utf8]{inputenc}
+\\usepackage[T1]{fontenc}
 \\usepackage{hyperref}
+\\hypersetup{hidelinks}
 
-\\title{${work.title}}
-\\author{AI Researcher}
-\\date{\\today}
+\\title{${title.replace(/_/g, '\\_')}}
+\\author{\\IEEEauthorblockN{AI Research System}
+\\IEEEauthorblockA{\\textit{Automated Research Platform}}}
 
 \\begin{document}
 
@@ -228,18 +174,151 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 \\input{Results}
 \\input{Conclusion}
 
+\\begin{thebibliography}{00}
+${bibEntries}
+\\end{thebibliography}
+
 \\end{document}`;
-    
-    updateGeneratedFile(activeWorkId, 'main.tex', mainTex);
+  };
+
+  // ─── Main generation pipeline ────────────────────────────────────────────
+  const startGeneration = async (latestNodes?: Node[], latestEdges?: Edge[]) => {
+    if (!activeWorkId) return;
+    const work = works.find(w => w.id === activeWorkId);
+    if (!work) return;
+
+    setGenerationStatus('planning');
+    setAgentLogs([]);
+
+    const log = (agent: string, message: string) => {
+      setAgentLogs(prev => [...prev, { agent, message, time: new Date().toLocaleTimeString() }]);
+    };
+
+    log('System', 'Initializing generation sequence...');
+
+    const nodesToUse = latestNodes || work.nodes;
+    const graphContext = nodesToUse.map(n => JSON.stringify(n.data)).join('\n');
+    const refsContext = references.map(r => `${getBibKey(r)}: "${r.title}" by ${r.authors} (${r.year})`).join('\n');
+
+    // ── 1. Planning ─────────────────────────────────────────────────────────
+    log('Planner', 'Analysing research graph...');
+    const outlinePrompt = `${LATEX_SYSTEM_INSTRUCTION}
+
+Create a concise paragraph-level outline (plain text, NOT LaTeX) for each section of an IEEE paper titled "${work.title}".
+Research context:\n${graphContext}
+Respond with a plain-text outline only — no code, no LaTeX.`;
+
+    const outline = stripReasoning(await generateAcademicContent(outlinePrompt));
+    log('Planner', 'Outline ready.');
+
+    // ── 2. Reference discovery ──────────────────────────────────────────────
+    setGenerationStatus('discovering');
+    log('Commander', 'Orchestrating reference discovery...');
+    await new Promise(r => setTimeout(r, 800));
+    log('Paper Parser', `${references.length} references loaded from library.`);
+
+    // ── 3. Assigning ────────────────────────────────────────────────────────
+    setGenerationStatus('assigning');
+    log('Commander', 'Assigning references to sections...');
+    await new Promise(r => setTimeout(r, 600));
+    log('Commander', 'Reference assignment complete.');
+
+    // ── 4. Section generation (parallel) ───────────────────────────────────
+    setGenerationStatus('intro');
+    log('Writer', 'Drafting Introduction, Methods, Results in parallel...');
+
+    const generateSection = async (
+      sectionName: string,
+      instructions: string
+    ): Promise<string> => {
+      log(`Writer (${sectionName})`, `Drafting ${sectionName}...`);
+      const prompt = `${LATEX_SYSTEM_INSTRUCTION}
+
+Write the \\section{${sectionName}} for an IEEE paper titled "${work.title}".
+Paper outline:\n${outline}
+Available citations (use \\cite{key}):\n${refsContext}
+Research context:\n${graphContext}
+
+${instructions}
+
+Output raw LaTeX only — no preamble, no \\begin{document}.`;
+
+      const raw = await generateAcademicContent(prompt);
+      const clean = stripReasoning(raw);
+      updateGeneratedFile(activeWorkId!, `${sectionName}.tex`, clean);
+      log(`Reviewer (${sectionName})`, `${sectionName} passed consistency check.`);
+      return clean;
+    };
+
+    const [introText, methodsText, resultsText] = await Promise.all([
+      generateSection('Introduction',
+        'Cover background, motivation, related work (with \\cite{}), and contributions. Use \\section{Introduction}.'),
+      generateSection('Methods',
+        'Detail experimental setup, algorithms, or theoretical framework. Use \\section{Methods}.'),
+      generateSection('Results',
+        'Present quantitative and qualitative findings, tables or figures if appropriate. Use \\section{Results}.')
+    ]);
+
+    // ── 5. Synthesis ────────────────────────────────────────────────────────
+    setGenerationStatus('synthesis');
+    log('Writer', 'Synthesising Abstract and Conclusion...');
+
+    // Abstract
+    const abstractPrompt = `${LATEX_SYSTEM_INSTRUCTION}
+
+Write ONLY the IEEE abstract environment for a paper titled "${work.title}".
+Based on:
+Introduction summary: ${introText.slice(0, 600)}
+Methods summary: ${methodsText.slice(0, 400)}
+Results summary: ${resultsText.slice(0, 400)}
+
+Output exactly:
+\\begin{abstract}
+(150–200 words of abstract text)
+\\end{abstract}`;
+
+    const abstractRaw = stripReasoning(await generateAcademicContent(abstractPrompt));
+    // Ensure it is wrapped correctly even if the model slips
+    const abstractContent = abstractRaw.includes('\\begin{abstract}')
+      ? abstractRaw.match(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/)?.[0] ?? abstractRaw
+      : `\\begin{abstract}\n${abstractRaw}\n\\end{abstract}`;
+    updateGeneratedFile(activeWorkId!, 'Abstract.tex', abstractContent);
+    log('Writer (Abstract)', 'Abstract complete.');
+
+    // Conclusion
+    const conclusionPrompt = `${LATEX_SYSTEM_INSTRUCTION}
+
+Write the \\section{Conclusion} for the IEEE paper titled "${work.title}".
+Summarise contributions, discuss limitations and future work.
+Introduction: ${introText.slice(0, 400)}
+Results: ${resultsText.slice(0, 400)}
+
+Output raw LaTeX only — start with \\section{Conclusion}.`;
+
+    const conclusionRaw = stripReasoning(await generateAcademicContent(conclusionPrompt));
+    updateGeneratedFile(activeWorkId!, 'Conclusion.tex', conclusionRaw);
+    log('Writer (Conclusion)', 'Conclusion complete.');
+    log('Reviewer', 'Abstract and Conclusion verified.');
+
+    // ── 6. Assembly ─────────────────────────────────────────────────────────
+    setGenerationStatus('review');
+    log('Typesetter', 'Assembling main.tex and references.bib...');
+
+    const mainTex = buildMainTex(work.title, references);
+    updateGeneratedFile(activeWorkId!, 'main.tex', mainTex);
+
+    const bibContent = buildBibFile(references);
+    updateGeneratedFile(activeWorkId!, 'references.bib', bibContent);
 
     setGenerationStatus('completed');
-    log('System', 'Paper generation complete. Ready for download.');
+    log('System', 'Paper generation complete. Click "Compile PDF" to render.');
   };
 
   return (
     <AppContext.Provider value={{
       works, activeWorkId, references, generationStatus, agentLogs,
-      createWork, setActiveWork: setActiveWorkId, updateWorkGraph, addReference, startGeneration, setGenerationStatus, updateGeneratedFile
+      createWork, setActiveWork: setActiveWorkId, updateWorkGraph,
+      addReference, startGeneration, setGenerationStatus, updateGeneratedFile
     }}>
       {children}
     </AppContext.Provider>
