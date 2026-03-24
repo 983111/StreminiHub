@@ -490,6 +490,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [generationStatus, setGenerationStatus] = useState<string>('idle');
   const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
   const filesRef = useRef<Record<string, string>>({});
+  // Refs so the async generation function always reads latest values
+  const worksRef = useRef(works);
+  const referencesRef = useRef(references);
+  const activeWorkIdRef = useRef(activeWorkId);
+  worksRef.current = works;
+  referencesRef.current = references;
+  activeWorkIdRef.current = activeWorkId;
 
   const createWork = (title: string, description: string) => {
     const w: Work = {
@@ -512,12 +519,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const addReference = (ref: Omit<Reference, 'id'>) =>
     setReferences(prev => [...prev, { ...ref, id: uuidv4() }]);
 
-  const saveFile = (workId: string, filename: string, content: string) => {
-    const trimmed = content.trim();
-    filesRef.current[filename] = trimmed;
+  // Accumulate into ref (no re-render), then flush all at once with flushFiles
+  const saveFile = (filename: string, content: string) => {
+    filesRef.current[filename] = content.trim();
+  };
+
+  const flushFiles = (workId: string) => {
+    const snapshot = { ...filesRef.current };
     setWorks(prev => prev.map(w =>
       w.id === workId
-        ? { ...w, generatedFiles: { ...(w.generatedFiles || {}), [filename]: trimmed } }
+        ? { ...w, generatedFiles: { ...(w.generatedFiles || {}), ...snapshot } }
         : w
     ));
   };
@@ -526,13 +537,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   // Generation: AI returns JSON only, we build all LaTeX ourselves
   // ---------------------------------------------------------------------------
   const startGeneration = async (latestNodes?: Node[], latestEdges?: Edge[]) => {
-    if (!activeWorkId) return;
-    const work = works.find(w => w.id === activeWorkId);
+    const currentWorkId = activeWorkIdRef.current;
+    if (!currentWorkId) return;
+    const work = worksRef.current.find(w => w.id === currentWorkId);
     if (!work) return;
 
     filesRef.current = {};
-    const workId = activeWorkId;
-    const refList = references;
+    const workId = currentWorkId;
+    const refList = referencesRef.current;
 
     setGenerationStatus('planning');
     setAgentLogs([]);
@@ -782,19 +794,22 @@ conclusionCitationKeys must only contain keys from: ${availableKeys.join(', ')}`
         },
       };
 
-      // ---- Build all files ----
+      // ---- Build all files (accumulate into ref, then flush once) ----
       log('Typesetter', 'Building LaTeX files...');
       const sectionFiles = buildSectionFiles(paperContent, refList);
       for (const [fname, fcontent] of Object.entries(sectionFiles)) {
-        saveFile(workId, fname, fcontent);
+        saveFile(fname, fcontent);
       }
 
       log('Typesetter', 'Writing references.bib...');
-      saveFile(workId, 'references.bib', buildBib(refList));
+      saveFile('references.bib', buildBib(refList));
 
       log('Typesetter', 'Assembling main.tex...');
       const mainTex = assembleMainTex(work.title, paperContent, refList);
-      saveFile(workId, 'main.tex', mainTex);
+      saveFile('main.tex', mainTex);
+
+      // Single atomic flush — all 7 files land in one setState call
+      flushFiles(workId);
 
       log('Typesetter', 'main.tex: ' + mainTex.split('\n').length + ' lines. All files ready.');
       setGenerationStatus('completed');
@@ -806,10 +821,11 @@ conclusionCitationKeys must only contain keys from: ${availableKeys.join(', ')}`
       const fallback = defaultContent(work.title, refList);
       const sectionFiles = buildSectionFiles(fallback, refList);
       for (const [fname, fcontent] of Object.entries(sectionFiles)) {
-        saveFile(workId, fname, fcontent);
+        saveFile(fname, fcontent);
       }
-      saveFile(workId, 'references.bib', buildBib(refList));
-      saveFile(workId, 'main.tex', assembleMainTex(work.title, fallback, refList));
+      saveFile('references.bib', buildBib(refList));
+      saveFile('main.tex', assembleMainTex(work.title, fallback, refList));
+      flushFiles(workId);
       setGenerationStatus('completed');
       log('System', 'Emergency assembly complete.');
     }
