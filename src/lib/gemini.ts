@@ -8,7 +8,7 @@ interface ChatCompletionResponse {
   }>;
 }
 
-export async function generateAcademicContent(prompt: string) {
+export async function generateAcademicContent(prompt: string, maxTokens = 4000) {
   const endpoint = import.meta.env.VITE_AI_ENDPOINT || FALLBACK_API_ENDPOINT;
 
   try {
@@ -19,6 +19,7 @@ export async function generateAcademicContent(prompt: string) {
       },
       body: JSON.stringify({
         stream: false,
+        max_tokens: maxTokens,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
