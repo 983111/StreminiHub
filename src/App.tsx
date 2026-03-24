@@ -8,7 +8,7 @@ import { Navbar, Home, ResearchGraph, PaperGeneration, References, Agents } from
 import { AppProvider } from './context/AppContext';
 
 export default function App() {
-  const [currentView, setCurrentView] = useState('home');
+  const [currentView, setCurrentView] = useState('graph');
 
   const renderView = () => {
     switch (currentView) {
@@ -23,7 +23,7 @@ export default function App() {
 
   return (
     <AppProvider>
-      <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <div className="min-h-screen bg-white text-slate-900 font-sans">
         <Navbar currentView={currentView} setView={setCurrentView} />
         <main className="pt-16">
           {renderView()}

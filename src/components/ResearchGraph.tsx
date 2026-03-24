@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { File, Lightbulb, BookOpen, X, Plus, Settings2, Play, ChevronRight } from 'lucide-react';
+import { File, Lightbulb, BookOpen, X, Settings2, Play, Save, CalendarDays } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import {
   ReactFlow,
@@ -70,6 +70,21 @@ const StartNode = ({ id, data }: any) => {
             value={data.venue || ''} 
             onChange={(e) => updateNodeData(id, { venue: e.target.value })}
           />
+        </div>
+        <div>
+          <label className="flex items-center justify-between text-xs font-medium text-slate-700 mb-1.5">
+            <span>Deadline</span>
+            <span className="text-[10px] text-slate-400 font-normal">date</span>
+          </label>
+          <div className="relative">
+            <input
+              type="date"
+              className="w-full text-sm border border-slate-200 rounded-md p-2 pr-8 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              value={data.deadline || ''}
+              onChange={(e) => updateNodeData(id, { deadline: e.target.value })}
+            />
+            <CalendarDays className="w-4 h-4 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
         </div>
       </div>
       <CustomHandle type="source" position={Position.Right} className="!bg-indigo-500 !border-white" />
@@ -213,16 +228,23 @@ function ResearchGraphContent({ setView }: { setView: (v: string) => void }) {
   }
 
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
-      {/* Sidebar */}
-      <div className="w-64 border-r border-slate-200 bg-white flex flex-col z-10">
-        <div className="p-4 border-b border-slate-200">
-          <h2 className="font-semibold text-slate-900 line-clamp-1">{activeWork.title}</h2>
-          <p className="text-xs text-slate-500 mt-0.5">My research Work</p>
+    <div className="flex flex-col h-[calc(100vh-4rem)]">
+      <div className="h-20 border-b border-slate-200 bg-white px-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-serif font-semibold text-slate-900">{activeWork.title || 'Test Work'}</h1>
+          <p className="text-slate-500 mt-1 text-sm">My research Work</p>
         </div>
+        <button onClick={handleSave} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium shadow-sm hover:bg-indigo-700 transition-colors flex items-center gap-2">
+          <Save className="w-4 h-4" /> Save
+        </button>
+      </div>
+      <div className="flex flex-1">
+      {/* Sidebar */}
+      <div className="w-72 border-r border-slate-200 bg-white flex flex-col z-10">
         <div className="flex border-b border-slate-200 text-sm">
           <button className="flex-1 py-2.5 border-b-2 border-indigo-600 text-indigo-600 font-medium">Nodes</button>
           <button className="flex-1 py-2.5 text-slate-500 hover:text-slate-900 font-medium">References</button>
+          <button className="flex-1 py-2.5 text-slate-500 hover:text-slate-900 font-medium">Work Info</button>
         </div>
         <div className="flex-1 p-4 overflow-y-auto">
           <div className="space-y-1.5">
@@ -251,10 +273,7 @@ function ResearchGraphContent({ setView }: { setView: (v: string) => void }) {
 
       {/* Canvas */}
       <div className="flex-1 relative bg-slate-50">
-        <div className="absolute top-4 right-4 flex gap-2 z-10">
-           <button onClick={handleSave} className="px-4 py-2 bg-white border border-slate-200 rounded-md text-sm font-medium shadow-sm hover:bg-slate-50 text-slate-700 transition-colors">
-             Save Graph
-           </button>
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-10">
            <button onClick={() => setShowGenModal(true)} className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium shadow-sm hover:bg-indigo-700 transition-colors flex items-center gap-2">
              <Play className="w-4 h-4" /> Generate Paper
            </button>
@@ -274,6 +293,7 @@ function ResearchGraphContent({ setView }: { setView: (v: string) => void }) {
           <Controls className="bg-white border-slate-200 shadow-sm rounded-md overflow-hidden" />
           <MiniMap className="bg-white border-slate-200 shadow-sm rounded-md" maskColor="rgba(248, 250, 252, 0.8)" />
         </ReactFlow>
+      </div>
       </div>
 
       {/* Generate Modal */}

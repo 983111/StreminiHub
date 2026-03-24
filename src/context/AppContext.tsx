@@ -649,17 +649,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [works, setWorks] = useState<Work[]>([
     {
       id: '1',
-      title: 'AI tools expand impact but contract focus',
-      description: 'Template canvas based on Nature AI-Science study.',
+      title: 'Test Work',
+      description: 'My research Work',
       nodes: [
-        { id: 'start-1', type: 'startNode', position: { x: 100, y: 100 }, data: { title: 'AI tools expand impact but contract focus', venue: 'Nature' } },
-        { id: 'idea-1', type: 'ideaNode', position: { x: 500, y: 150 }, data: { body: 'AI tools have a dual effect on scientific research: they expand citation reach but narrow topical focus.' } },
-        { id: 'lit-1', type: 'literatureNode', position: { x: 500, y: 350 }, data: { title: 'Large-scale Bibliometric Analysis', file: 'dataset.csv' } },
+        { id: 'start-1', type: 'startNode', position: { x: 100, y: 100 }, data: { title: '', venue: '', deadline: '' } },
       ],
-      edges: [
-        { id: 'e1', source: 'start-1', target: 'idea-1', type: 'smoothstep' },
-        { id: 'e2', source: 'start-1', target: 'lit-1', type: 'smoothstep' },
-      ],
+      edges: [],
       generatedFiles: {},
     },
   ]);
