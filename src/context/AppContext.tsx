@@ -391,37 +391,52 @@ function assembleMainTex(title: string, content: PaperContent, refs: Reference[]
 
   const bibItems = buildBibItems(refs);
 
-  return `\\documentclass[conference]{IEEEtran}
-\\IEEEoverridecommandlockouts
+  return `\\documentclass[12pt,a4paper]{article}
+\\usepackage[a4paper, margin=2.5cm]{geometry}
 \\usepackage{cite}
 \\usepackage{amsmath,amssymb,amsfonts}
-\\usepackage{algorithmic}
 \\usepackage{graphicx}
 \\usepackage{textcomp}
 \\usepackage{xcolor}
 \\usepackage{booktabs}
 \\usepackage{array}
 \\usepackage{url}
-\\def\\BibTeX{{\\rm B\\kern-.05em{\\sc i\\kern-.025em b}\\kern-.08em
-    T\\kern-.1667em\\lower.7ex\\hbox{E}\\kern-.125em{X}}}
+\\usepackage{setspace}
+\\usepackage{titlesec}
+\\usepackage{abstract}
+\\usepackage{parskip}
+\\usepackage{hyperref}
+\\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\\titleformat{\\section}{\\large\\bfseries}{\\thesection}{1em}{}
+\\titleformat{\\subsection}{\\normalsize\\bfseries}{\\thesubsection}{1em}{}
+\\setlength{\\parskip}{6pt}
+\\setlength{\\parindent}{0pt}
+\\onehalfspacing
 
 \\begin{document}
 
-\\title{${safeTitle}}
-
-\\author{\\IEEEauthorblockN{AI Research System}
-\\IEEEauthorblockA{\\textit{Automated Research Platform} \\\\
-research@ai-system.org}}
-
-\\maketitle
-
+\\begin{titlepage}
+\\centering
+\\vspace*{2cm}
+{\\LARGE\\bfseries ${safeTitle}\\par}
+\\vspace{1.5cm}
+{\\large AI Research System\\par}
+{\\normalsize Automated Research Platform\\par}
+{\\normalsize research@ai-system.org\\par}
+\\vspace{1cm}
+{\\normalsize \\today\\par}
+\\vspace{2cm}
 \\begin{abstract}
+\\setlength{\\parskip}{4pt}
 ${abstractBody}
 \\end{abstract}
+\\vspace{0.5cm}
+\\textbf{Keywords:} ${keywordsLine}
+\\end{titlepage}
 
-\\begin{IEEEkeywords}
-${keywordsLine}
-\\end{IEEEkeywords}
+\\tableofcontents
+\\newpage
 
 \\section{Introduction}
 ${introBody}
@@ -725,7 +740,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     const availableKeys = refList.map(r => bibKey(r));
     const refSummary = refList.map(r => bibKey(r) + ': "' + r.title + '" (' + r.year + ')').join('\n');
 
-    const SYS = `You are a research paper content generator. Output ONLY valid JSON. No markdown, no explanations, no LaTeX commands, no code fences. Pure JSON only. All string values must be plain English prose. DO NOT use backslashes, curly braces, dollar signs, percent signs, ampersands, or hash characters in any string value. Write detailed, academic, full-length paragraphs of at least 5-8 sentences each.`;
+    const SYS = `You are a research paper content generator writing a FULL LENGTH 10-page academic paper. Output ONLY valid JSON. No markdown, no explanations, no LaTeX commands, no code fences. Pure JSON only. All string values must be plain English prose paragraphs. DO NOT use backslashes, curly braces, dollar signs, percent signs, ampersands, or hash characters. CRITICAL: Every paragraph field must be AT MINIMUM 8-12 sentences of detailed academic prose (150-200 words each). Be thorough, specific, and verbose. Do not truncate or summarize. Write complete, publication-quality academic content.`;
 
     const KEYS_RULE = `\nIMPORTANT: Any citationKeys field must only contain keys from this exact list: ${availableKeys.join(', ')}. If none apply use [].`;
 
@@ -914,12 +929,12 @@ ${KEYS_RULE}`;
 
       // Fire all 5 requests in parallel for speed
       const [introRaw, relatedRaw, methodsRaw, experimentsRaw, resultsAndDiscussionRaw, conclusionRaw] = await Promise.all([
-        generateAcademicContent(introPrompt).then(r => { log('Writer', 'Introduction received'); return r; }),
-        generateAcademicContent(relatedPrompt).then(r => { log('Writer', 'Related Work received'); return r; }),
-        generateAcademicContent(methodsPrompt).then(r => { log('Writer', 'Methods received'); return r; }),
-        generateAcademicContent(experimentsPrompt).then(r => { log('Writer', 'Experiments received'); return r; }),
-        generateAcademicContent(resultsPrompt).then(r => { log('Writer', 'Results + Discussion received'); return r; }),
-        generateAcademicContent(conclusionPrompt).then(r => { log('Writer', 'Conclusion received'); return r; }),
+        generateAcademicContent(introPrompt, 4000).then(r => { log('Writer', 'Introduction received'); return r; }),
+        generateAcademicContent(relatedPrompt, 4000).then(r => { log('Writer', 'Related Work received'); return r; }),
+        generateAcademicContent(methodsPrompt, 4000).then(r => { log('Writer', 'Methods received'); return r; }),
+        generateAcademicContent(experimentsPrompt, 4000).then(r => { log('Writer', 'Experiments received'); return r; }),
+        generateAcademicContent(resultsPrompt, 4000).then(r => { log('Writer', 'Results + Discussion received'); return r; }),
+        generateAcademicContent(conclusionPrompt, 4000).then(r => { log('Writer', 'Conclusion received'); return r; }),
       ]);
 
       setGenerationStatus('synthesis');
