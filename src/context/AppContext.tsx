@@ -45,19 +45,29 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
-// BibTeX key
+// BibTeX key — must be ASCII letters+digits only, must start with a letter
 // ---------------------------------------------------------------------------
 function bibKey(ref: Reference): string {
-  const last = ref.authors.split(',')[0].trim().split(' ').pop() || 'Author';
-  return last.replace(/[^a-zA-Z]/g, '') + ref.year;
+  const rawLast = ref.authors.split(',')[0].trim().split(' ').pop() || 'Author';
+  // Transliterate common accented chars, then strip anything non-ASCII-alpha
+  const transliterated = rawLast
+    .normalize('NFD')                       // decompose accents
+    .replace(/[\u0300-\u036f]/g, '')        // strip combining diacritics
+    .replace(/[^a-zA-Z0-9]/g, '');         // strip remaining non-alnum
+  // Ensure key starts with a letter (BibTeX requirement)
+  const safe = /^[a-zA-Z]/.test(transliterated) ? transliterated : 'Ref' + transliterated;
+  return (safe || 'Author') + String(ref.year);
 }
 
 // ---------------------------------------------------------------------------
-// Escape text for safe LaTeX inclusion
+// Escape text for safe LaTeX inclusion — call ONCE per string
 // ---------------------------------------------------------------------------
 function latexEscape(s: string): string {
+  if (!s) return '';
   return s
-    .replace(/\\/g, '\\textbackslash{}')
+    // Strip any stray backslashes from AI output FIRST (before we add our own)
+    .replace(/\\/g, '')
+    // Now escape LaTeX special chars
     .replace(/&/g, '\\&')
     .replace(/%/g, '\\%')
     .replace(/\$/g, '\\$')
@@ -68,7 +78,17 @@ function latexEscape(s: string): string {
     .replace(/\{/g, '\\{')
     .replace(/\}/g, '\\}')
     .replace(/</g, '\\textless{}')
-    .replace(/>/g, '\\textgreater{}');
+    .replace(/>/g, '\\textgreater{}')
+    // Curly/smart quotes → straight LaTeX quotes
+    .replace(/[\u201C\u201D\u201E\u201F]/g, "''")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    // Straight double-quote → LaTeX open/close (simplest safe approach)
+    .replace(/"/g, "''")
+    // Em/en dash
+    .replace(/\u2014/g, '---')
+    .replace(/\u2013/g, '--')
+    // Ellipsis
+    .replace(/\u2026/g, '\\ldots{}');
 }
 
 // ---------------------------------------------------------------------------
@@ -76,17 +96,17 @@ function latexEscape(s: string): string {
 // ---------------------------------------------------------------------------
 function parseJson<T>(raw: string, fallback: T): T {
   try {
-    // Strip markdown fences, think tags, leading/trailing garbage
     let s = raw;
+    // Strip reasoning/thinking blocks
     s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
     s = s.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '');
     s = s.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '');
+    // Strip markdown fences
     s = s.replace(/```[\w]*\n?/gi, '').replace(/```/g, '');
     // Find first { or [
     const start = s.search(/[\[{]/);
     if (start === -1) return fallback;
     s = s.slice(start);
-    // Find matching close
     const end = s.lastIndexOf(s[0] === '[' ? ']' : '}');
     if (end === -1) return fallback;
     s = s.slice(0, end + 1);
@@ -97,7 +117,8 @@ function parseJson<T>(raw: string, fallback: T): T {
 }
 
 // ---------------------------------------------------------------------------
-// Convert plain text paragraphs to LaTeX paragraph blocks (safe)
+// Convert plain text paragraphs to LaTeX paragraph blocks
+// Escapes the text — do NOT pre-escape before calling this
 // ---------------------------------------------------------------------------
 function textToLatexParagraphs(text: string): string {
   if (!text) return '';
@@ -111,6 +132,7 @@ function textToLatexParagraphs(text: string): string {
 
 // ---------------------------------------------------------------------------
 // Build a LaTeX itemize list from string array
+// Items must NOT be pre-escaped
 // ---------------------------------------------------------------------------
 function buildItemize(items: string[]): string {
   if (!items || !items.length) return '';
@@ -120,7 +142,8 @@ function buildItemize(items: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// Build a LaTeX table from headers + rows (all escaped)
+// Build a LaTeX table from headers + rows
+// Values must NOT be pre-escaped
 // ---------------------------------------------------------------------------
 function buildTable(caption: string, headers: string[], rows: string[][], label: string): string {
   if (!headers.length || !rows.length) return '';
@@ -128,7 +151,6 @@ function buildTable(caption: string, headers: string[], rows: string[][], label:
   const colSpec = 'l' + 'c'.repeat(cols - 1);
   const hdr = headers.map(h => '\\textbf{' + latexEscape(h) + '}').join(' & ');
   const dataRows = rows.map(r => {
-    // Pad or trim to match header count
     const padded = [...r];
     while (padded.length < cols) padded.push('--');
     return padded.slice(0, cols).map(c => latexEscape(String(c))).join(' & ') + ' \\\\';
@@ -155,6 +177,7 @@ function buildBib(refs: Reference[]): string {
   if (!refs.length) return '% No references.';
   return refs.map(r => {
     const k = bibKey(r);
+    // For .bib files, use minimal escaping — just strip braces that would break the format
     const safeTitle = r.title.replace(/[{}]/g, '');
     const safeAuthors = r.authors.replace(/[{}]/g, '');
     let entry = `@article{${k},\n  author  = {${safeAuthors}},\n  title   = {{${safeTitle}}},\n  year    = {${r.year}},\n  journal = {Proceedings},\n  pages   = {1--10}`;
@@ -165,20 +188,23 @@ function buildBib(refs: Reference[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// Build references thebibliography entries
+// Build \bibitem entries for thebibliography
+// Uses safe LaTeX escaping — no raw backtick/quote tricks
 // ---------------------------------------------------------------------------
 function buildBibItems(refs: Reference[]): string {
+  if (!refs.length) return '';
   return refs.map(r => {
     const k = bibKey(r);
     const safeTitle = latexEscape(r.title);
     const safeAuthors = latexEscape(r.authors);
     const doiPart = r.doi ? ' doi:' + r.doi + '.' : '';
-    return `\\bibitem{${k}}\n${safeAuthors},\n``${safeTitle},''\n${r.year}.${doiPart}`;
+    // Use \textit for title — safe, no raw quote marks
+    return `\\bibitem{${k}}\n${safeAuthors},\n\\textit{${safeTitle}},\n${r.year}.${doiPart}`;
   }).join('\n\n');
 }
 
 // ---------------------------------------------------------------------------
-// THE ONLY LaTeX TEMPLATE — AI never generates LaTeX, only JSON content
+// Paper content interface
 // ---------------------------------------------------------------------------
 interface PaperContent {
   abstract: string;
@@ -213,21 +239,22 @@ interface PaperContent {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Assemble main.tex — all text goes through latexEscape via helper functions
+// ---------------------------------------------------------------------------
 function assembleMainTex(
   title: string,
   content: PaperContent,
   refs: Reference[],
 ): string {
+  // Title is escaped directly
   const safeTitle = latexEscape(title);
   const numRefs = String(Math.max(refs.length, 1)).padStart(2, '0');
 
-  // Cite commands — only emit if keys exist
   const makeCite = (keys: string[]) => keys.length ? ' \\cite{' + keys.join(',') + '}' : '';
 
-  // Abstract
   const abstractBody = textToLatexParagraphs(content.abstract);
 
-  // Introduction
   const introContribList = buildItemize(content.intro.contributions);
   const introCite = makeCite(content.intro.citationKeys);
   const introBody =
@@ -236,7 +263,6 @@ function assembleMainTex(
     textToLatexParagraphs(content.intro.problemStatement) + '\n\n' +
     'The main contributions of this work are:\n' + introContribList;
 
-  // Methods
   const methodsDetails = content.methods.details.map(d => textToLatexParagraphs(d)).join('\n\n');
   const methodsTable = buildTable(
     content.methods.tableCaption || 'System Parameters',
@@ -249,7 +275,6 @@ function assembleMainTex(
     methodsDetails + '\n\n' +
     methodsTable;
 
-  // Results
   const resultsPoints = buildItemize(content.results.analysisPoints);
   const resultsCite = makeCite(content.results.citationKeys);
   const resultsTable = buildTable(
@@ -267,12 +292,13 @@ function assembleMainTex(
     resultsTable + '\n\n' +
     'Key findings:\n' + resultsPoints;
 
-  // Conclusion
   const conclCite = makeCite(content.conclusion.citationKeys);
   const conclusionBody =
     textToLatexParagraphs(content.conclusion.summary) + conclCite + '\n\n' +
     textToLatexParagraphs(content.conclusion.limitations) + '\n\n' +
     textToLatexParagraphs(content.conclusion.futureWork);
+
+  const bibItems = buildBibItems(refs);
 
   return `\\documentclass[conference]{IEEEtran}
 \\IEEEoverridecommandlockouts
@@ -315,14 +341,14 @@ ${resultsBody}
 ${conclusionBody}
 
 \\begin{thebibliography}{${numRefs}}
-${buildBibItems(refs)}
+${bibItems || '\\bibitem{placeholder} No references provided.'}
 \\end{thebibliography}
 
 \\end{document}`;
 }
 
 // ---------------------------------------------------------------------------
-// Section .tex files for the file browser (pretty display only)
+// Section .tex files for the file browser
 // ---------------------------------------------------------------------------
 function buildSectionFiles(content: PaperContent, refs: Reference[]): Record<string, string> {
   const makeCite = (keys: string[]) => keys.length ? ' \\cite{' + keys.join(',') + '}' : '';
@@ -523,8 +549,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     const availableKeys = refList.map(r => bibKey(r));
     const refSummary = refList.map(r => bibKey(r) + ': "' + r.title + '" (' + r.year + ')').join('\n');
 
-    // JSON schema prompt
-    const JSON_SYSTEM = `You are a research paper content generator. You output ONLY valid JSON. No markdown, no explanations, no LaTeX, no code fences. Pure JSON only.`;
+    const JSON_SYSTEM = `You are a research paper content generator. You output ONLY valid JSON. No markdown, no explanations, no LaTeX, no code fences. Pure JSON only. All string values must be plain English text with NO special characters, NO backslashes, NO curly braces, NO dollar signs, NO percent signs, NO ampersands, NO underscores used as formatting. Write naturally as if composing plain prose.`;
 
     try {
       log('Planner', 'Generating paper content as structured data...');
@@ -540,25 +565,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
 Generate content for the Introduction and Abstract of an IEEE paper titled: "${work.title}"
 Context: ${graphCtx}
-Available citation keys (use ONLY these): ${availableKeys.join(', ')}
+Available citation keys (use ONLY these, exactly as written): ${availableKeys.join(', ')}
 Reference details:
 ${refSummary}
 
-Return this exact JSON structure (fill in the values, keep keys identical):
+Return this exact JSON structure:
 {
   "abstract": "150-200 word abstract summarizing the paper",
-  "background": "2-3 sentence background/motivation paragraph",
-  "relatedWork": "2-3 sentence related work paragraph mentioning the research area",
+  "background": "2-3 sentence background paragraph",
+  "relatedWork": "2-3 sentence related work paragraph",
   "problemStatement": "2-3 sentence problem statement",
   "contributions": ["contribution 1", "contribution 2", "contribution 3", "contribution 4"],
   "introCitationKeys": ["key1", "key2"]
 }
 
-Rules:
-- All values are plain text strings (no LaTeX commands, no backslashes, no special chars)
-- introCitationKeys must be a subset of: ${availableKeys.join(', ')}
-- If no keys fit, use empty array []
-- Pure JSON only`;
+IMPORTANT: introCitationKeys must only contain keys from this list: ${availableKeys.join(', ')}
+If none apply, use an empty array [].`;
 
       const introRaw = await generateAcademicContent(introPrompt);
       log('Writer', 'Introduction JSON received.');
@@ -594,7 +616,7 @@ Return this exact JSON structure:
   "overview": "2-3 sentence overview of the methodology",
   "detail1": "2-3 sentence paragraph about the first methodological component",
   "detail2": "2-3 sentence paragraph about the second methodological component",
-  "tableCaption": "Short table caption describing parameters",
+  "tableCaption": "Short table caption",
   "tableHeaders": ["Column1", "Column2", "Column3"],
   "tableRows": [
     ["row1col1", "row1col2", "row1col3"],
@@ -604,11 +626,7 @@ Return this exact JSON structure:
   ]
 }
 
-Rules:
-- All values are plain text strings (no LaTeX, no backslashes, no special chars like & $ # _ ^ ~ { })
-- tableHeaders: array of 3 column header strings
-- tableRows: array of arrays, each inner array has exactly 3 string values
-- Pure JSON only`;
+IMPORTANT: tableHeaders must have exactly 3 items. Each tableRows sub-array must have exactly 3 items. No special characters in any values.`;
 
       const methodsRaw = await generateAcademicContent(methodsPrompt);
       log('Writer', 'Methods JSON received.');
@@ -643,13 +661,11 @@ Rules:
 Generate Results section content for an IEEE paper titled: "${work.title}"
 Context: ${graphCtx}
 Available citation keys: ${availableKeys.join(', ')}
-Reference details:
-${refSummary}
 
 Return this exact JSON structure:
 {
   "setup": "2-3 sentence experimental setup description",
-  "mainResults": "2-3 sentence description of main quantitative results",
+  "mainResults": "2-3 sentence description of main results",
   "analysisPoints": ["finding 1", "finding 2", "finding 3"],
   "tableCaption": "Performance Comparison",
   "tableHeaders": ["Method", "Metric1", "Metric2", "Metric3"],
@@ -661,12 +677,7 @@ Return this exact JSON structure:
   "resultsCitationKeys": ["key1"]
 }
 
-Rules:
-- All values are plain text strings (no LaTeX, no backslashes, no special chars like & $ # _ ^ ~ { })
-- tableHeaders: exactly 4 strings
-- tableRows: each inner array has exactly 4 string values, use realistic numbers
-- resultsCitationKeys must be a subset of: ${availableKeys.join(', ')}
-- Pure JSON only`;
+IMPORTANT: tableHeaders must have exactly 4 items. Each tableRows sub-array must have exactly 4 items. resultsCitationKeys must only contain keys from: ${availableKeys.join(', ')}`;
 
       const resultsRaw = await generateAcademicContent(resultsPrompt);
       log('Writer', 'Results JSON received.');
@@ -706,16 +717,13 @@ Available citation keys: ${availableKeys.join(', ')}
 
 Return this exact JSON structure:
 {
-  "summary": "2-3 sentence summary of the paper contributions",
+  "summary": "2-3 sentence summary of contributions",
   "limitations": "1-2 sentence description of current limitations",
   "futureWork": "1-2 sentence description of future research directions",
   "conclusionCitationKeys": ["key1"]
 }
 
-Rules:
-- All values are plain text strings (no LaTeX, no backslashes, no special chars like & $ # _ ^ ~ { })
-- conclusionCitationKeys must be a subset of: ${availableKeys.join(', ')}
-- Pure JSON only`;
+conclusionCitationKeys must only contain keys from: ${availableKeys.join(', ')}`;
 
       const conclusionRaw = await generateAcademicContent(conclusionPrompt);
       log('Writer', 'Conclusion JSON received.');
@@ -794,7 +802,6 @@ Rules:
 
     } catch (err: any) {
       log('System', 'ERROR: ' + (err?.message || String(err)));
-      // Emergency: use default content
       log('System', 'Using fallback content for emergency assembly...');
       const fallback = defaultContent(work.title, refList);
       const sectionFiles = buildSectionFiles(fallback, refList);
