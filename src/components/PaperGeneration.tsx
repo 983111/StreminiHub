@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   CheckCircle2, CircleDashed, FileText,
-  Download, Columns, Play, Search, Plus, Loader2, AlertTriangle,
+  Download, Columns, Play, Search, Plus, Loader2, AlertTriangle, Copy, Check,
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 
@@ -9,7 +9,7 @@ import { useAppContext } from '../context/AppContext';
 // TaskItem
 // ---------------------------------------------------------------------------
 const TaskItem = ({ title, subtitle, status, active }: any) => (
-  <div className={`p-3 rounded-lg border ${active ? 'border-indigo-200 bg-indigo-50' : 'border-transparent hover:bg-slate-50'} cursor-pointer transition-colors`}>
+  <div className={`p-3 rounded-lg border ${active ? 'border-indigo-200 bg-indigo-50' : 'border-transparent hover:bg-slate-50'} transition-colors`}>
     <div className="flex items-center gap-2 mb-1">
       {status === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
       {status === 'running'   && <CircleDashed  className="w-4 h-4 text-indigo-500 animate-spin shrink-0" />}
@@ -20,9 +20,6 @@ const TaskItem = ({ title, subtitle, status, active }: any) => (
   </div>
 );
 
-// ---------------------------------------------------------------------------
-// Stage helpers
-// ---------------------------------------------------------------------------
 const STAGES = ['idle','planning','discovering','assigning','intro','body','synthesis','review','completed'];
 function stageStatus(stage: string, current: string) {
   const si = STAGES.indexOf(stage), ci = STAGES.indexOf(current);
@@ -41,122 +38,89 @@ async function compileToPdf(latex: string): Promise<Blob> {
       resources: [{ main: true, content: latex }],
     }),
   });
-
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText);
-    throw new Error('Compiler ' + res.status + ':\n' + txt.slice(0, 1200));
+    throw new Error(txt.slice(0, 2000));
   }
-
   const blob = await res.blob();
-  if (blob.type && !blob.type.includes('pdf')) {
+  if (!blob.type.includes('pdf')) {
     const txt = await blob.text();
-    throw new Error('Unexpected response (' + blob.type + '):\n' + txt.slice(0, 1200));
+    throw new Error(txt.slice(0, 2000));
   }
   return blob;
 }
 
 // ---------------------------------------------------------------------------
-// Build a compilable LaTeX document for previewing a section file standalone
+// Wrap a section snippet in a minimal compilable IEEE document for preview
 // ---------------------------------------------------------------------------
 function wrapSnippet(filename: string, content: string): string {
-  // Strip any leaked preamble from the snippet
-  const snippet = content
+  const stripped = content
     .replace(/\\documentclass(\[[^\]]*\])?\{[^}]+\}\s*/g, '')
     .replace(/\\usepackage(\[[^\]]*\])?\{[^}]+\}\s*/g, '')
-    .replace(/\\usetikzlibrary[^\n]*\n?/g, '')
-    .replace(/\\pgfplotsset[^\n]*\n?/g, '')
-    .replace(/\\definecolor[^\n]*\n?/g, '')
     .replace(/\\begin\{document\}\s*/g, '')
     .replace(/\\end\{document\}\s*/g, '')
+    .replace(/\\maketitle\s*/g, '')
     .trim();
 
-  const safeFile = filename.replace(/_/g, '\\_');
-
-  return [
-    '\\documentclass[conference]{IEEEtran}',
-    '\\usepackage{cite}',
-    '\\usepackage{amsmath,amssymb,amsfonts}',
-    '\\usepackage{graphicx}',
-    '\\usepackage{textcomp}',
-    '\\usepackage{xcolor}',
-    '\\usepackage{colortbl}',
-    '\\usepackage{booktabs}',
-    '\\usepackage{array}',
-    '\\usepackage{tikz}',
-    '\\usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,backgrounds,calc}',
-    '\\usepackage{pgfplots}',
-    '\\pgfplotsset{compat=1.17}',
-    '\\usepackage{hyperref}',
-    '\\hypersetup{hidelinks}',
-    '\\definecolor{ieeeblue}{RGB}{0,84,166}',
-    '\\definecolor{ieeegray}{RGB}{220,220,220}',
-    '\\definecolor{ieeegreen}{RGB}{0,128,64}',
-    '\\definecolor{ieeeorange}{RGB}{220,100,0}',
-    '\\title{Preview: ' + safeFile + '}',
-    '\\author{AI Research System}',
-    '\\begin{document}',
-    '\\maketitle',
-    snippet,
-    '\\begin{thebibliography}{00}\\end{thebibliography}',
-    '\\end{document}',
-  ].join('\n');
+  return `\\documentclass[conference]{IEEEtran}
+\\IEEEoverridecommandlockouts
+\\usepackage{cite}
+\\usepackage{amsmath,amssymb,amsfonts}
+\\usepackage{graphicx}
+\\usepackage{textcomp}
+\\usepackage{xcolor}
+\\usepackage{booktabs}
+\\usepackage{array}
+\\usepackage{multirow}
+\\usepackage{url}
+\\begin{document}
+\\title{Preview: ${filename.replace(/_/g, '\\_')}}
+\\author{Preview}
+\\maketitle
+${stripped}
+\\begin{thebibliography}{00}\\end{thebibliography}
+\\end{document}`;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 export default function PaperGeneration() {
-  const {
-    works, activeWorkId, generationStatus, agentLogs,
-    references, updateGeneratedFile, addReference,
-  } = useAppContext();
+  const { works, activeWorkId, generationStatus, agentLogs, references, updateGeneratedFile, addReference } = useAppContext();
 
   const [activeFile,       setActiveFile]       = useState('main.tex');
   const [viewMode,         setViewMode]          = useState<'source' | 'pdf' | 'split'>('split');
   const [activeSidebarTab, setActiveSidebarTab]  = useState<'tasks' | 'references'>('tasks');
-  const [selectedCitation, setSelectedCitation]  = useState<{
-    keys: string[]; start: number; end: number; originalText: string;
-  } | null>(null);
+  const [selectedCitation, setSelectedCitation]  = useState<{ keys: string[]; start: number; end: number; originalText: string } | null>(null);
   const [referenceSearch,  setReferenceSearch]   = useState('');
   const [showAddRef,       setShowAddRef]         = useState(false);
-  const [newRef,           setNewRef]             = useState({
-    title: '', authors: '', year: String(new Date().getFullYear()), doi: '',
-  });
+  const [newRef,           setNewRef]             = useState({ title: '', authors: '', year: String(new Date().getFullYear()), doi: '' });
   const [showDownload,     setShowDownload]       = useState(false);
+  const [copied,           setCopied]             = useState(false);
 
-  // PDF state
   const [pdfUrl,       setPdfUrl]       = useState<string | null>(null);
   const [isCompiling,  setIsCompiling]  = useState(false);
   const [compileError, setCompileError] = useState<string | null>(null);
   const blobRef = useRef<string | null>(null);
 
   const activeWork = works.find(w => w.id === activeWorkId);
+  const generatedFiles = activeWork?.generatedFiles || {};
+  const generatedContent = generatedFiles[activeFile] || '';
 
-  // Switch to main.tex automatically when done
   useEffect(() => {
     if (generationStatus === 'completed') setActiveFile('main.tex');
   }, [generationStatus]);
 
-  // Revoke blob on unmount
   useEffect(() => () => { if (blobRef.current) URL.revokeObjectURL(blobRef.current); }, []);
 
-  const generatedFiles = activeWork?.generatedFiles || {};
-  const generatedContent = generatedFiles[activeFile] || '';
-
-  // Choose what LaTeX to compile
   const getLatexToCompile = (): string => {
-    if (activeFile === 'main.tex') {
-      return generatedFiles['main.tex'] || '';
-    }
-    if (activeFile === 'references.bib') {
-      return ''; // can't compile a .bib alone
-    }
+    if (activeFile === 'references.bib') return '';
+    if (activeFile === 'main.tex') return generatedFiles['main.tex'] || '';
     const content = generatedFiles[activeFile] || '';
-    if (!content) return '';
-    return wrapSnippet(activeFile, content);
+    return content ? wrapSnippet(activeFile, content) : '';
   };
 
-  // ---- Citation helpers ------------------------------------------------
+  // Citation helpers
   const getCitationKey = (ref: any) => {
     const last = ref.authors.split(',')[0].trim().split(' ').pop() || '';
     return last.replace(/[^a-zA-Z]/g, '') + ref.year;
@@ -169,8 +133,8 @@ export default function PaperGeneration() {
       : [...selectedCitation.keys, key];
     const prefix = (selectedCitation.originalText.match(/^(\\(?:cite|citep|citet)(?:\[[^\]]*\])?\{)/) || ['', '\\cite{'])[1];
     const newText = newKeys.length ? prefix + newKeys.join(', ') + '}' : '';
-    const before  = generatedContent.slice(0, selectedCitation.start);
-    const after   = generatedContent.slice(selectedCitation.end);
+    const before = generatedContent.slice(0, selectedCitation.start);
+    const after  = generatedContent.slice(selectedCitation.end);
     updateGeneratedFile(activeWorkId, activeFile, before + newText + after);
     newKeys.length
       ? setSelectedCitation({ keys: newKeys, start: selectedCitation.start, end: selectedCitation.start + newText.length, originalText: newText })
@@ -178,34 +142,32 @@ export default function PaperGeneration() {
   };
 
   const renderSource = (content: string) => {
-    const rx    = /(\\(?:cite|citep|citet)(?:\[[^\]]*\])?\{[^}]+\})/g;
+    const rx = /(\\(?:cite|citep|citet)(?:\[[^\]]*\])?\{[^}]+\})/g;
     const parts = content.split(rx);
-    let offset  = 0;
+    let offset = 0;
     return parts.map((part, i) => {
       const start = offset; offset += part.length; const end = offset;
       if (/^\\cite/.test(part) && part.endsWith('}')) {
-        const keys  = (part.match(/\{([^}]+)\}/) || ['', ''])[1].split(',').map(k => k.trim());
+        const keys = (part.match(/\{([^}]+)\}/) || ['', ''])[1].split(',').map(k => k.trim());
         const isSel = selectedCitation?.start === start;
         return (
           <span key={i + '-' + start}
             className={'cursor-pointer rounded px-0.5 ' + (isSel ? 'bg-indigo-500 text-white' : 'bg-indigo-800/50 text-indigo-200 hover:bg-indigo-700/60')}
-            onClick={() => { setSelectedCitation({ keys, start, end, originalText: part }); setActiveSidebarTab('references'); }}
-          >{part}</span>
+            onClick={() => { setSelectedCitation({ keys, start, end, originalText: part }); setActiveSidebarTab('references'); }}>
+            {part}
+          </span>
         );
       }
       return <span key={i + '-' + start}>{part}</span>;
     });
   };
 
-  // ---- Compile ---------------------------------------------------------
   const handleCompile = async () => {
     const latex = getLatexToCompile();
     if (!latex) {
-      setCompileError('No LaTeX content to compile for this file. Select main.tex or a section file.');
-      return;
-    }
-    if (activeFile === 'references.bib') {
-      setCompileError('.bib files cannot be compiled directly. Select main.tex.');
+      setCompileError(activeFile === 'references.bib'
+        ? '.bib files cannot be compiled. Select main.tex instead.'
+        : 'No content to compile. Generate the paper first.');
       return;
     }
     if (viewMode === 'source') setViewMode('split');
@@ -218,16 +180,24 @@ export default function PaperGeneration() {
       blobRef.current = url;
       setPdfUrl(url);
     } catch (e: any) {
-      setCompileError(e.message || 'Unknown compile error');
+      setCompileError(e.message || 'Compile failed');
     } finally {
       setIsCompiling(false);
     }
   };
 
+  const handleCopy = async () => {
+    const latex = getLatexToCompile() || generatedContent;
+    if (!latex) return;
+    await navigator.clipboard.writeText(latex);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   const handleDownloadTex = () => {
     setShowDownload(false);
-    const latex = getLatexToCompile();
-    if (!latex) { alert('No content to download.'); return; }
+    const latex = getLatexToCompile() || generatedContent;
+    if (!latex) { alert('Nothing to download.'); return; }
     const url = URL.createObjectURL(new Blob([latex], { type: 'text/plain' }));
     Object.assign(document.createElement('a'), { href: url, download: activeFile === 'main.tex' ? 'paper.tex' : activeFile }).click();
     URL.revokeObjectURL(url);
@@ -236,7 +206,7 @@ export default function PaperGeneration() {
   const handleDownloadBib = () => {
     setShowDownload(false);
     const bib = generatedFiles['references.bib'] || '';
-    if (!bib) { alert('references.bib not generated yet.'); return; }
+    if (!bib) { alert('references.bib not ready yet.'); return; }
     const url = URL.createObjectURL(new Blob([bib], { type: 'text/plain' }));
     Object.assign(document.createElement('a'), { href: url, download: 'references.bib' }).click();
     URL.revokeObjectURL(url);
@@ -245,13 +215,13 @@ export default function PaperGeneration() {
   const handleDownloadPdf = async () => {
     setShowDownload(false);
     const latex = getLatexToCompile();
-    if (!latex) { alert('No content to compile.'); return; }
+    if (!latex) { alert('No compilable content.'); return; }
     try {
       const blob = await compileToPdf(latex);
-      const url  = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       Object.assign(document.createElement('a'), { href: url, download: 'paper.pdf' }).click();
       URL.revokeObjectURL(url);
-    } catch (e: any) { alert('Failed: ' + e.message); }
+    } catch (e: any) { alert('PDF compile failed: ' + e.message); }
   };
 
   const fileList = [
@@ -264,7 +234,6 @@ export default function PaperGeneration() {
     { name: 'references.bib',   indent: false },
   ];
 
-  // ---- Idle guard -------------------------------------------------------
   if (generationStatus === 'idle') {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-4rem)] bg-slate-50">
@@ -278,8 +247,8 @@ export default function PaperGeneration() {
   }
 
   const latexToCompile = getLatexToCompile();
+  const canCompile = !!latexToCompile && activeFile !== 'references.bib';
 
-  // =======================================================================
   return (
     <div className="flex h-[calc(100vh-4rem)]">
 
@@ -294,25 +263,23 @@ export default function PaperGeneration() {
           ))}
         </div>
 
-        {/* Tasks */}
         {activeSidebarTab === 'tasks' && (
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             <TaskItem title="Planning"              subtitle="Creating paper plan"         status={stageStatus('planning',    generationStatus)} active={generationStatus === 'planning'} />
             <TaskItem title="Ref Discovery"         subtitle="Loading reference library"   status={stageStatus('discovering', generationStatus)} active={generationStatus === 'discovering'} />
             <TaskItem title="Ref Assignment"        subtitle="Assigning refs to sections"  status={stageStatus('assigning',   generationStatus)} active={generationStatus === 'assigning'} />
-            <TaskItem title="Introduction"          subtitle="With TikZ diagram"           status={stageStatus('intro',       generationStatus)} active={generationStatus === 'intro'} />
-            <TaskItem title="Methods + Results"     subtitle="With diagrams & tables"      status={stageStatus('body',        generationStatus)} active={generationStatus === 'body'} />
+            <TaskItem title="Introduction"          subtitle="With citations and structure" status={stageStatus('intro',       generationStatus)} active={generationStatus === 'intro'} />
+            <TaskItem title="Methods + Results"     subtitle="With tables and analysis"    status={stageStatus('body',        generationStatus)} active={generationStatus === 'body'} />
             <TaskItem title="Abstract + Conclusion" subtitle="Synthesis pass"              status={stageStatus('synthesis',   generationStatus)} active={generationStatus === 'synthesis'} />
             <TaskItem title="Assembly"              subtitle="Building main.tex + .bib"    status={stageStatus('review',      generationStatus)} active={generationStatus === 'review'} />
             {generationStatus === 'completed' && (
-              <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-700 text-center font-medium">
-                ✓ All files ready — click "Compile PDF"
+              <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-700 font-medium text-center">
+                ✓ All files ready
               </div>
             )}
           </div>
         )}
 
-        {/* References */}
         {activeSidebarTab === 'references' && (
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             {selectedCitation && (
@@ -326,9 +293,7 @@ export default function PaperGeneration() {
                     const k = getCitationKey(ref);
                     return (
                       <label key={ref.id} className="flex items-start gap-2 cursor-pointer">
-                        <input type="checkbox" checked={selectedCitation.keys.includes(k)}
-                          onChange={() => handleToggleCitation(k)}
-                          className="mt-0.5 rounded text-indigo-600" />
+                        <input type="checkbox" checked={selectedCitation.keys.includes(k)} onChange={() => handleToggleCitation(k)} className="mt-0.5 rounded text-indigo-600" />
                         <div>
                           <div className="text-xs font-medium text-slate-700 leading-tight">{ref.title}</div>
                           <div className="text-[10px] text-slate-500">{ref.authors} ({ref.year})</div>
@@ -347,14 +312,13 @@ export default function PaperGeneration() {
             </div>
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
-              <input type="text" placeholder="Search..." value={referenceSearch}
-                onChange={e => setReferenceSearch(e.target.value)}
+              <input type="text" placeholder="Search..." value={referenceSearch} onChange={e => setReferenceSearch(e.target.value)}
                 className="w-full pl-8 pr-2 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-500" />
             </div>
             {references
               .filter(r => r.title.toLowerCase().includes(referenceSearch.toLowerCase()) || r.authors.toLowerCase().includes(referenceSearch.toLowerCase()))
               .map(ref => (
-                <div key={ref.id} className="p-2.5 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 cursor-pointer text-xs">
+                <div key={ref.id} className="p-2.5 bg-white border border-slate-200 rounded-lg text-xs">
                   <div className="font-mono text-indigo-500 mb-0.5">{getCitationKey(ref)}</div>
                   <div className="font-medium text-slate-800 leading-snug">{ref.title}</div>
                   <div className="text-slate-500 mt-0.5">{ref.authors} · {ref.year}</div>
@@ -372,12 +336,14 @@ export default function PaperGeneration() {
           <div className="p-2 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
             <FileText className="w-3.5 h-3.5" /> Files
           </div>
-          <div className="p-1.5 space-y-0.5">
+          <div className="p-1.5 space-y-0.5 flex-1">
             {fileList.map(f => {
               const hasContent = !!generatedFiles[f.name];
               return (
                 <div key={f.name} onClick={() => setActiveFile(f.name)}
-                  className={'flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer text-xs transition-colors ' + (f.indent ? 'pl-5 ' : '') + (activeFile === f.name ? 'bg-indigo-50 text-indigo-600 font-medium' : 'text-slate-600 hover:bg-slate-50')}>
+                  className={'flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer text-xs transition-colors ' +
+                    (f.indent ? 'pl-5 ' : '') +
+                    (activeFile === f.name ? 'bg-indigo-50 text-indigo-600 font-medium' : 'text-slate-600 hover:bg-slate-50')}>
                   <FileText className="w-3 h-3 shrink-0" />
                   <span className="truncate">{f.name}</span>
                   {hasContent && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />}
@@ -385,11 +351,9 @@ export default function PaperGeneration() {
               );
             })}
           </div>
-
-          {/* File stats */}
           {generationStatus === 'completed' && (
-            <div className="mt-auto p-2 border-t border-slate-100 text-xs text-slate-400">
-              {fileList.filter(f => generatedFiles[f.name]).length}/{fileList.length} files generated
+            <div className="p-2 border-t border-slate-100 text-xs text-slate-400">
+              {fileList.filter(f => generatedFiles[f.name]).length}/{fileList.length} files ready
             </div>
           )}
         </div>
@@ -409,14 +373,21 @@ export default function PaperGeneration() {
               ))}
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleCompile}
-                disabled={isCompiling || !latexToCompile || activeFile === 'references.bib'}
-                className="flex items-center gap-1.5 text-sm text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 px-3 py-1.5 rounded-md transition-colors"
-              >
+              {/* Copy to clipboard */}
+              <button onClick={handleCopy} disabled={!generatedContent}
+                className="flex items-center gap-1.5 text-sm text-slate-600 bg-white border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 disabled:opacity-40 transition-colors">
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+
+              {/* Compile */}
+              <button onClick={handleCompile} disabled={isCompiling || !canCompile}
+                className="flex items-center gap-1.5 text-sm text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 px-3 py-1.5 rounded-md transition-colors">
                 {isCompiling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                 {isCompiling ? 'Compiling...' : 'Compile PDF'}
               </button>
+
+              {/* Download */}
               <div className="relative">
                 <button onClick={() => setShowDownload(!showDownload)}
                   className="flex items-center gap-1.5 text-sm text-slate-600 bg-white border border-slate-200 px-3 py-1.5 rounded-md">
@@ -425,12 +396,12 @@ export default function PaperGeneration() {
                 {showDownload && (
                   <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-lg shadow-xl p-1.5 z-50">
                     <button onClick={handleDownloadTex} className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-md">
-                      LaTeX source ({activeFile === 'main.tex' ? 'main.tex' : activeFile})
+                      LaTeX (.tex)
                     </button>
                     <button onClick={handleDownloadBib} className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-md">
-                      Bibliography (references.bib)
+                      Bibliography (.bib)
                     </button>
-                    <button onClick={handleDownloadPdf} disabled={activeFile === 'references.bib'} className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-md disabled:opacity-40">
+                    <button onClick={handleDownloadPdf} disabled={!canCompile} className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-md disabled:opacity-40">
                       Compiled PDF
                     </button>
                   </div>
@@ -451,23 +422,21 @@ export default function PaperGeneration() {
                     ? <pre className="whitespace-pre-wrap break-words">{renderSource(generatedContent)}</pre>
                     : <span className="text-slate-600 italic">
                         {generationStatus !== 'idle' && generationStatus !== 'completed'
-                          ? '% Generating...'
-                          : '% File not yet generated'}
+                          ? '% Generating — please wait...'
+                          : '% File not yet generated. Run paper generation first.'}
                       </span>
                   }
                 </div>
-
-                {/* Agent logs panel */}
                 {generationStatus !== 'completed' && generationStatus !== 'idle' && (
-                  <div className="h-36 shrink-0 p-3 bg-slate-950 font-mono text-xs overflow-y-auto border-t border-slate-800">
+                  <div className="h-40 shrink-0 p-3 bg-slate-950 font-mono text-xs overflow-y-auto border-t border-slate-800">
                     <div className="text-slate-500 mb-2 flex items-center gap-2">
-                      Agent Logs <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      Live Logs <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     </div>
-                    {agentLogs.map((l, i) => (
+                    {agentLogs.slice(-20).map((l, i) => (
                       <div key={i} className="flex gap-2 leading-5">
                         <span className="text-slate-600 shrink-0">[{l.time}]</span>
-                        <span className="text-indigo-400 shrink-0 w-24 truncate">[{l.agent}]</span>
-                        <span className="text-emerald-300">{l.message}</span>
+                        <span className="text-indigo-400 shrink-0 w-20 truncate">[{l.agent}]</span>
+                        <span className="text-emerald-300 break-all">{l.message}</span>
                       </div>
                     ))}
                   </div>
@@ -477,25 +446,23 @@ export default function PaperGeneration() {
 
             {/* PDF pane */}
             {(viewMode === 'pdf' || viewMode === 'split') && (
-              <div className={'flex flex-col min-h-0 bg-slate-200 relative ' + (viewMode === 'split' ? 'w-1/2' : 'flex-1')}>
+              <div className={'flex flex-col min-h-0 bg-slate-100 relative ' + (viewMode === 'split' ? 'w-1/2' : 'flex-1')}>
 
-                {/* Error */}
                 {compileError && (
-                  <div className="m-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex gap-2 overflow-auto max-h-64 shrink-0">
+                  <div className="m-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex gap-2 overflow-auto max-h-72 shrink-0">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
-                    <div>
-                      <div className="font-semibold mb-1">LaTeX compile error</div>
-                      <pre className="whitespace-pre-wrap font-mono">{compileError}</pre>
+                    <div className="min-w-0">
+                      <div className="font-semibold mb-1">Compile error — tip: copy the LaTeX and paste into Overleaf (overleaf.com) for detailed diagnostics</div>
+                      <pre className="whitespace-pre-wrap font-mono text-[10px] break-all">{compileError}</pre>
                     </div>
                   </div>
                 )}
 
-                {/* Compiling overlay */}
                 {isCompiling && (
-                  <div className="absolute inset-0 bg-white/75 flex flex-col items-center justify-center z-10 gap-3">
+                  <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center z-10 gap-3">
                     <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
                     <p className="text-sm font-medium text-slate-700">Compiling with pdflatex…</p>
-                    <p className="text-xs text-slate-400">This may take 10–30 seconds</p>
+                    <p className="text-xs text-slate-400">Usually 10–30 seconds</p>
                   </div>
                 )}
 
@@ -503,14 +470,12 @@ export default function PaperGeneration() {
                   <iframe src={pdfUrl} className="flex-1 w-full border-none bg-white" title="PDF Preview" />
                 ) : !compileError && !isCompiling ? (
                   <div className="flex-1 flex items-center justify-center">
-                    <div className="text-center text-slate-500">
-                      <FileText className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-                      <p className="text-sm font-medium mb-1">PDF Preview</p>
-                      <p className="text-xs">
-                        {activeFile === 'references.bib'
-                          ? '.bib files cannot be compiled — select main.tex'
-                          : 'Click Compile PDF to render'}
+                    <div className="text-center text-slate-400">
+                      <FileText className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                      <p className="text-sm font-medium text-slate-600 mb-1">
+                        {activeFile === 'references.bib' ? 'Select main.tex to compile' : 'Click "Compile PDF" to render'}
                       </p>
+                      <p className="text-xs text-slate-400">Powered by latex.ytotech.com</p>
                     </div>
                   </div>
                 ) : null}
@@ -529,17 +494,18 @@ export default function PaperGeneration() {
               <button onClick={() => setShowAddRef(false)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
             </div>
             <div className="p-5 space-y-3">
-              {[
-                { label: 'Title',   k: 'title',   ph: 'Paper title'           },
-                { label: 'Authors', k: 'authors', ph: 'e.g. Smith, John and Doe, Jane' },
-              ].map(({ label, k, ph }) => (
-                <div key={k}>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">{label}</label>
-                  <input type="text" value={(newRef as any)[k]} placeholder={ph}
-                    onChange={e => setNewRef({ ...newRef, [k]: e.target.value })}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-              ))}
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Title *</label>
+                <input type="text" value={newRef.title} placeholder="Paper title"
+                  onChange={e => setNewRef({ ...newRef, title: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Authors * (format: Last, First and Last2, First2)</label>
+                <input type="text" value={newRef.authors} placeholder="Smith, John and Doe, Jane"
+                  onChange={e => setNewRef({ ...newRef, authors: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Year</label>
@@ -560,13 +526,7 @@ export default function PaperGeneration() {
               <button
                 disabled={!newRef.title || !newRef.authors}
                 onClick={() => {
-                  addReference({
-                    title: newRef.title,
-                    authors: newRef.authors,
-                    year: parseInt(newRef.year) || new Date().getFullYear(),
-                    doi: newRef.doi,
-                    linked: 0,
-                  });
+                  addReference({ title: newRef.title, authors: newRef.authors, year: parseInt(newRef.year) || new Date().getFullYear(), doi: newRef.doi, linked: 0 });
                   setShowAddRef(false);
                   setNewRef({ title: '', authors: '', year: String(new Date().getFullYear()), doi: '' });
                 }}
